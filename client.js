@@ -50,6 +50,7 @@ window.__ModuleLoader__.load({
       createLibraryName: '知识库名称',
       createLibraryScope: '生效范围',
       scopeUser: '用户（所有已授权工作区可用）',
+      scopeShared: '共享库',
       scopeWorkspace: '工作区（仅该工作区可用）',
       create: '创建',
       chooseWorkspace: '选择工作区',
@@ -160,6 +161,7 @@ window.__ModuleLoader__.load({
       createLibraryName: 'Knowledge base name',
       createLibraryScope: 'Effective scope',
       scopeUser: 'User (usable from every permitted workspace)',
+      scopeShared: 'Shared library',
       scopeWorkspace: 'Workspace (only inside that workspace)',
       create: 'Create',
       chooseWorkspace: 'Choose workspace',
@@ -1000,7 +1002,7 @@ window.__ModuleLoader__.load({
       }
 
       const renderCollectionChip = (collection) => {
-        const scopeLabel = collection.scope === 'user' ? tr(t, 'scopeUser') : tr(t, 'scopeWorkspace')
+        const scopeLabel = collection.scope === 'user' ? tr(t, 'scopeUser') : collection.scope === 'shared' ? tr(t, 'scopeShared') : tr(t, 'scopeWorkspace')
         const chip = h('span', { className: 'kc-badge' }, `${collection.name} · ${scopeLabel}`)
         if (collection.id === 'shared') {
           return h('span', { key: collection.id, className: 'kc-row' }, chip)

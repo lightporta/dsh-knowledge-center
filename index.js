@@ -1151,12 +1151,18 @@ async function ingestDocument(ctx, store, { workspace, collection, relativePath,
   })
 }
 
-async function searchLibrary(store, { cwd, query, collectionId, limit }, snapshot) {
+async function searchLibrary(store, { cwd, query, collectionId, limit, includeWorkspacePath = true }, snapshot) {
   const index = snapshot ?? await store.readIndex()
   const accessible = cwd === undefined ? undefined : accessibleCollectionIds(index, cwd)
   let candidates = index.entries.filter((entry) => accessible === undefined || accessible.has(entry.collectionId))
   if (collectionId !== undefined) candidates = candidates.filter((entry) => entry.collectionId === collectionId)
   const cappedLimit = Math.max(1, Math.min(50, limit ?? TOOL_LIMIT_DEFAULT))
+  const resultMetadata = (entry) => {
+    const metadata = entryMetadata(index, entry)
+    // Agent-facing results must not reveal which workspace published a shared note.
+    if (!includeWorkspacePath) delete metadata.workspacePath
+    return metadata
+  }
   const normalized = (query ?? '').trim().toLowerCase()
   if (normalized.length === 0) {
     return {
@@ -1166,7 +1172,7 @@ async function searchLibrary(store, { cwd, query, collectionId, limit }, snapsho
         .slice()
         .sort((left, right) => (right.updatedAt ?? 0) - (left.updatedAt ?? 0))
         .slice(0, cappedLimit)
-        .map((entry) => ({ ...entryMetadata(index, entry), updatedAt: isoTime(entry.updatedAt), score: 0, snippet: entry.summary ?? '' })),
+        .map((entry) => ({ ...resultMetadata(entry), updatedAt: isoTime(entry.updatedAt), score: 0, snippet: entry.summary ?? '' })),
     }
   }
   const tokens = searchTokens(normalized)
@@ -1200,7 +1206,7 @@ async function searchLibrary(store, { cwd, query, collectionId, limit }, snapsho
     query: query ?? '',
     total: scored.length,
     results: scored.slice(0, cappedLimit).map((item) => ({
-      ...entryMetadata(index, item.entry),
+      ...resultMetadata(item.entry),
       updatedAt: isoTime(item.entry.updatedAt),
       score: item.score,
       snippet: item.snippet,
@@ -1931,6 +1937,7 @@ export function apply(ctx) {
         cwd,
         query,
         collectionId: asOptionalString(input.collectionId),
+        includeWorkspacePath: false,
         limit,
       })
       return {

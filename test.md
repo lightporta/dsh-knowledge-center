@@ -15,13 +15,13 @@ $files = Get-ChildItem test -Filter '*.test.mjs' | ForEach-Object { $_.FullName 
 node --test $files
 ```
 
-## 当前用例（122 项）
+## 当前用例（123 项）
 
 | 文件 | 覆盖 | 用例数 |
 | --- | --- | --- |
 | `test/client-behavior.test.mjs` | 详情串页误删、旧响应与错误、编辑草稿、扫描与搜索竞态、共享刷新、恢复提示、键盘操作 | 21 |
 | `test/extract.test.mjs` | DOCX/XLSX/PPTX/HTML/PDF 提取、解压预算、取消传播 | 27 |
-| `test/host.test.mjs` | RPC、授权、生成、检索、预算阶梯与 max 兜底、截断回执、版本门/迁移、S1 收口、会话附件提炼、库级共享与撤销、共享库写入与移动、**v1.8 嵌套不继承/移动查重** | 25 |
+| `test/host.test.mjs` | RPC、授权、生成、检索、预算阶梯与 max 兜底、截断回执、版本门/迁移、S1 收口、会话附件提炼、库级共享与撤销、共享库写入与移动、嵌套不继承/移动查重、**v1.8.1 搜索不泄露来源路径** | 26 |
 | `test/lock.test.mjs` | 同进程与真实子进程互斥、锁释放、崩溃回收、Windows 注入回归 | 15 |
 | `test/manifest.test.mjs` | 包入口、发布文件、bundle、locale、许可证一致性 | 6 |
 | `test/paths.test.mjs` | win32/darwin/POSIX 路径规则、工作区边界、来源身份 | 11 |
@@ -32,7 +32,7 @@ node --test $files
 
 | 日期 | 环境 | 轮次 | 结果 |
 | --- | --- | --- | --- |
-| 2026-10-25 | Windows 11，Node.js 24.16.0 | 1 | 122/122 通过，0 失败/跳过/取消 |
+| 2026-10-25 | Windows 11，Node.js 24.16.0 | 1 | 123/123 通过，0 失败/跳过/取消 |
 
 v1.2.0 发布前同一套件在 Windows（Node.js 22.23.4 与 24.16.0）下连续 3 轮 113/113；v1.3.0 新增 3 项版本门与 S1 用例后为 116 项。
 
@@ -112,3 +112,8 @@ v1.2.0 发布前同一套件在 Windows（Node.js 22.23.4 与 24.16.0）下连�
 - B4：`setCollectionShare` 缺 `allowed` 时默认失败关闭。
 - B6：`state().tools` 上报 4 个工具。
 - A1：README/test.md/docs 已脱敏；`scripts/check.mjs` 增加本地绝对路径扫描。
+
+## v1.8.1（隐私与标签）
+
+- 模型侧 `knowledge_search` 结果不再包含来源 `workspacePath`（owner UI 仍保留），共享读者无法反推发布方工作区路径。
+- 知识库列表的共享库标签从“工作区库”改为“共享库”（中英双语）。

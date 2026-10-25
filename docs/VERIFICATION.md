@@ -142,3 +142,8 @@ Results here describe local automated checks. They do not certify real-model cal
 - 测试回仓并在 CI 三平台执行；`test.md` 脱敏，`scripts/check.mjs` 扫描本地绝对路径。
 - 修复：备份恢复清空共享授权、共享可见性精确匹配、移动查重与 front matter 同步、merge 输入上限、附件内容寻址来源、共享默认失败关闭、工具清单补全。
 - 本地回归 122/122（Windows，Node.js 24.16.0）；`npm run check` 通过。
+
+### v1.8.1（隐私与标签）
+
+- 模型侧搜索隐藏来源 workspacePath；owner UI 保留；共享库标签正确。
+- 本地回归 123/123。
