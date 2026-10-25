@@ -95,3 +95,12 @@ Results here describe local automated checks. They do not certify real-model cal
 - 发布检查：`npm run check` 通过（7 个文件语法 + 包清单/本地化校验）；`npm pack --dry-run` 为 14 个文件，版本 1.2.0。
 - 发版处理：按发布要求删除 `test/` 与 `scripts/test.mjs`，CI 保留语法与清单校验。
 - 未验证：宿主重启后真实模型 `reasoningEffort: max` 的实跑、10 MiB 端到端、三平台 CI；这些仍需发布后由实机与 CI 确认。
+
+## v1.3.0（A 阶段：底座）
+
+- 版本门：`INDEX_VERSION = 2`；读到更高版本索引返回 `KNOWLEDGE_INDEX_TOO_NEW` 并拒绝写入，不静默改写。
+- 迁移：v1 索引首次读取原地升级，保留 `index.v1-<ts>.json` 副本并写 `migration-<ts>.json` 收据；备份恢复路径同样升级。
+- S1 收口：模型工具 `knowledge_ingest` 只能写当前工作区库；全局/他用库由 owner 在设置页迁移。owner RPC 行为不变。
+- 测试：本地资产，`test/` 已被 `.gitignore` 忽略；用例与结果统一记录在 [test.md](../test.md)。v1.3.0 完整套件 116/116 连续 3 轮通过（Windows，Node.js 24.16.0）。
+- 发布检查：`npm run check` 通过；`npm pack --dry-run` 为 15 个文件（新增 test.md），版本 1.3.0。
+- 未验证：三平台 CI（推送后确认）、10MB 端到端、附件与共享（B/C 阶段）。

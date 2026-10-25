@@ -276,7 +276,7 @@ npm run check     # 语法检查合集
 
 ### 测试与验证
 
-v1.2.0 发布前，完整回归套件在 Windows 本机连续 3 轮 113/113 通过（见 [验证记录](docs/VERIFICATION.md)）。按发版要求，仓库不再附带测试文件；`npm run check` 仍执行语法检查与包清单/本地化校验。发布前可用 `npm pack --dry-run` 核对文件清单。
+测试是**本地资产**：`test/` 已在 `.gitignore` 中忽略，用例清单、运行方式与最近结果统一记录在 [test.md](test.md)；CI 执行 `npm run check`（语法 + 包清单/本地化校验）。发布前可用 `npm pack --dry-run` 核对文件清单。
 
 测试方法、结果、已归档项目与尚未验证的范围统一记录在 [验证记录](docs/VERIFICATION.md)。
 
@@ -574,7 +574,7 @@ Development notes:
 
 ### Testing and verification
 
-Before v1.2.0 the full regression suite passed 113/113 three times in a row on Windows (see the [verification log](docs/VERIFICATION.md)). The release no longer ships test files; `npm run check` still runs syntax, manifest and locale checks. Use `npm pack --dry-run` to inspect the release inventory.
+Tests are **local assets**: `test/` is git-ignored, and the inventory, how to run it and the latest results live in [test.md](test.md). CI runs `npm run check` (syntax, manifest and locale checks). Use `npm pack --dry-run` to inspect the release inventory.
 
 Methods, results, archived checks and verification limits are recorded in the [verification log](docs/VERIFICATION.md).
 

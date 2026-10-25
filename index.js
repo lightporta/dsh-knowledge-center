@@ -50,7 +50,7 @@ export const inject = [
 
 /** Package-private Runtime RPC route prefix (browser half calls it via context.connection.rpc.call). */
 const CHANNEL = '/knowledge-center'
-const INDEX_VERSION = 1
+const INDEX_VERSION = 2
 const DEFAULT_COLLECTION_ID = 'shared'
 const DEFAULT_COLLECTION_NAME = '全局知识库'
 /** Text-like and binary limits; extracted text is later bounded by the 72k distillation budget. */
@@ -232,6 +232,16 @@ function createEmptyIndex() {
   }
 }
 
+/** An index written by a newer plugin must never be silently rewritten by this build. */
+function indexTooNew(version) {
+  const error = new Error(
+    `Knowledge index version ${version} was written by a newer Knowledge Center build (this build supports ${INDEX_VERSION}). `
+    + 'Upgrade the plugin before using this profile, or restore an index backup; writes are refused to protect your data.',
+  )
+  error.code = 'KNOWLEDGE_INDEX_TOO_NEW'
+  return error
+}
+
 function ensureShape(index) {
   const safe = index !== null && typeof index === 'object' ? index : createEmptyIndex()
   if (!Array.isArray(safe.collections)) safe.collections = []
@@ -294,12 +304,38 @@ class KnowledgeStore {
     }
   }
 
+  /** In-memory upgrade; persisting the result is the caller's job. */
+  #upgradeIndex(index) {
+    if (index.version === undefined) index.version = 1
+    if (index.version > INDEX_VERSION) throw indexTooNew(index.version)
+    if (index.version < INDEX_VERSION) {
+      index.migration = { ...(index.migration ?? {}), from: index.version, to: INDEX_VERSION, at: Date.now() }
+      index.version = INDEX_VERSION
+    }
+    return index
+  }
+
+  /** Upgrade a valid primary index, keeping a one-off copy and a receipt. */
+  async #migrate(index) {
+    const from = index.version ?? 1
+    if (from > INDEX_VERSION) throw indexTooNew(from)
+    if (from === INDEX_VERSION) return index
+    const at = Date.now()
+    const copy = `index.v${from}-${at}.json`
+    await fsp.copyFile(this.indexPath, join(this.root, copy))
+    const upgraded = this.#upgradeIndex(index)
+    await this.#writeAtomic(this.indexPath, `${JSON.stringify(upgraded, null, 2)}\n`)
+    const receipt = { from, to: INDEX_VERSION, at, collections: upgraded.collections.length, entries: upgraded.entries.length, backup: copy }
+    await this.#writeAtomic(join(this.root, `migration-${at}.json`), `${JSON.stringify(receipt, null, 2)}\n`)
+    return upgraded
+  }
+
   async #readIndex() {
     const primary = await this.#readCandidate(this.indexPath)
-    if (primary.kind === 'valid') return primary.index
+    if (primary.kind === 'valid') return await this.#migrate(primary.index)
     const backup = await this.#readCandidate(this.backupPath)
     if (backup.kind === 'valid') {
-      const recovered = backup.index
+      const recovered = this.#upgradeIndex(backup.index)
       // An older backup may predate a permission revocation. Never restore its
       // grants; preserving notes does not authorize the model to access them.
       recovered.permissions = {}
@@ -841,11 +877,25 @@ function entryMetadata(index, entry) {
   }
 }
 
-async function resolveCollectionForIngest(store, workspace, collectionId) {
+/**
+ * Resolve the library an ingest writes into.
+ *
+ * `actor === 'tool'` is the model-facing path: it may only write the current
+ * workspace's own library, so a prompt-injected session cannot publish into the
+ * global or another workspace's library. Only the owner UI may target `user`
+ * libraries.
+ */
+async function resolveCollectionForIngest(store, workspace, collectionId, actor = 'owner') {
   if (collectionId !== undefined) {
     const index = await store.readIndex()
     const collection = index.collections.find((candidate) => candidate.id === collectionId)
     if (collection === undefined) throw new Error(`Unknown knowledge base: ${collectionId}`)
+    if (actor === 'tool' && collection.scope !== 'workspace') {
+      throw new Error(
+        `The model tool can only write to the current workspace's knowledge base. `
+        + `Ask the user to move this note into "${collection.name}" from Settings → 知识中心 (Knowledge Center).`,
+      )
+    }
     if (collection.scope === 'workspace' && comparisonKey(collection.workspacePath) !== comparisonKey(workspace.path)) {
       throw new Error(`Knowledge base "${collection.name}" belongs to another workspace.`)
     }
@@ -1723,7 +1773,7 @@ export function apply(ctx) {
         throw new Error(`The current directory is not a registered workspace: ${cwd}`)
       }
       const language = knowledgeLanguage(index, input.language === 'en' || input.language === 'zh' ? input.language : undefined)
-      const collection = await resolveCollectionForIngest(store, workspace, asOptionalString(input.collectionId))
+      const collection = await resolveCollectionForIngest(store, workspace, asOptionalString(input.collectionId), 'tool')
       const entries = []
       const failed = []
       for (const relativePath of paths) {
