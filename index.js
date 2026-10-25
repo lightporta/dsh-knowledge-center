@@ -489,7 +489,8 @@ async function generateText(ctx, { system, prompt, signal, selection = pickModel
         model: selection,
         attempt: {
           index: index + 1,
-          attempts: attempts.length,
+          attempts: index + 1,
+          maxAttempts: attempts.length,
           effort: result.effort,
           maxTokens: result.maxTokens,
           finishReason: result.finishReason,
