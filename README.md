@@ -65,7 +65,7 @@
 
 说明：
 
-- 文本文件上限 10 MiB，二进制文档上限 25 MiB；提取文本上限 40 万字符，随后仍受提炼预算（12k × 16 ≈ 192k 字符）约束。超出提炼预算的部分不送模型，并在 front matter 中标记 `truncated: true`：10 MiB 级文件可以被接受并提炼预算内有代表性的内容，而不是整篇逐段精读（那需要数百次模型调用）。
+- 文本文件上限 10 MiB，二进制文档上限 25 MiB；提取文本上限 40 万字符，随后仍受提炼预算（12k × 16 ≈ 192k 字符）约束。超出提炼预算的部分不送模型，并在 front matter 中标记 `truncated: true`：10 MiB 级文件可以被接受并提炼预算内的开头部分，而不是整篇逐段精读（那需要数百次模型调用）。
 - OOXML/PDF 解压预算为单项 16 MiB、累计 64 MiB；OOXML 忽略未使用的媒体资源。PDF 回退遇到冲突字体映射会明确报错，请使用 pdftotext。
 - PDF 只提取**文本层**；扫描件/纯图片 PDF、Word/PPT 中嵌入图片里的文字不在本次范围（需要 OCR）。
 - 旧版 `.doc/.xls/.ppt` 依赖 Harness profile 中启用的 `office-to-pdf`（桌面版默认随包提供）；若该服务不可用会给出明确错误。
@@ -226,10 +226,10 @@ generator: "provider/model"
 | 平台 | 支持 | 说明 |
 | --- | --- | --- |
 | macOS | ✅ | 已在本机完成端到端验证（安装、提炼、检索、RPC、Settings 注册） |
-| Windows | ✅（设计目标） | 路径使用 `node:path` 的 win32 规则：盘符 / UNC 根、`\` 分隔符、大小写不敏感比较；数据目录由 `DSH_HOME` 或 `os.homedir()` 决定。CI 在 windows-latest 上运行语法检查与路径单元测试；尚未在真机 Windows 上做完整 UI 端到端验证 |
-| Linux | ✅（设计目标） | POSIX 路径规则与 macOS 相同；CI 在 ubuntu-latest 上运行语法检查与路径单元测试；尚未在真机 Linux 上做完整 UI 端到端验证 |
+| Windows | ✅（设计目标） | 路径使用 `node:path` 的 win32 规则：盘符 / UNC 根、`\` 分隔符、大小写不敏感比较；数据目录由 `DSH_HOME` 或 `os.homedir()` 决定。CI 在 windows-latest 上运行语法与包清单检查；尚未在真机 Windows 上做完整 UI 端到端验证 |
+| Linux | ✅（设计目标） | POSIX 路径规则与 macOS 相同；CI 在 ubuntu-latest 上运行语法与包清单检查；尚未在真机 Linux 上做完整 UI 端到端验证 |
 
-跨平台逻辑集中在 `lib/paths.js`（`canonicalPath` / `comparisonKey` / `isSameOrInside` / `normalizeSourcePath` / `sourceKey` / `resolveDshHome`），并在 `test/paths.test.mjs` 中显式以 `win32`、`darwin` 与 POSIX 规则分别测试：Windows/macOS 按大小写不敏感比较，Linux 保持大小写敏感；来源路径统一为正斜杠后再去重。
+跨平台逻辑集中在 `lib/paths.js`（`canonicalPath` / `comparisonKey` / `isSameOrInside` / `normalizeSourcePath` / `sourceKey` / `resolveDshHome`），并已按 `win32`、`darwin` 与 POSIX 规则分别验证（v1.2.0 前由随仓库测试覆盖）：Windows/macOS 按大小写不敏感比较，Linux 保持大小写敏感；来源路径统一为正斜杠后再去重。
 
 ### 已知限制
 
@@ -251,15 +251,6 @@ dsh-knowledge-center/
 ├── client.js                # Client 半：侧边栏图标 + 整页面板 + Settings 页 + Markdown 渲染器
 ├── cordis.patch.yml         # DSH bundle patch（插入 Host row；Cordis = Harness 插件框架，与 Qoder 无关）
 ├── locale/                  # 插件清单显示标题/描述（en / zh）
-├── test/paths.test.mjs      # 跨平台路径单元测试
-├── test/text.test.mjs       # 分片字符预算单元测试
-├── test/manifest.test.mjs   # 仓库清单 / 打包 / 许可一致性测试
-├── test/extract.test.mjs    # 文档提取回归测试
-├── test/client-behavior.test.mjs # 异步竞态、草稿保护、搜索与键盘操作
-├── test/host.test.mjs       # RPC、授权、生成及检索
-├── test/lock.test.mjs       # 同进程/跨进程互斥与锁恢复
-├── test/store-recovery.test.mjs # 索引备份与恢复
-├── test/helpers/           # 核心行为测试使用的 React/RPC 环境
 ├── scripts/                # 跨平台测试与语法检查入口
 ├── docs/VERIFICATION.md    # 验证方法、结果和边界
 ├── .github/workflows/ci.yml # 三平台 CI（语法 + JSON + 单测）
@@ -274,7 +265,6 @@ node --check client.js
 node --check lib/paths.js
 node --check lib/text.js
 node --check lib/extract.js
-npm test          # 全套行为、存储、权限、并发、提取和基础回归测试
 npm run check     # 语法检查合集
 ```
 
@@ -286,9 +276,9 @@ npm run check     # 语法检查合集
 
 ### 测试与验证
 
-运行 `npm test` 和 `npm run check`，分别执行核心回归测试及语法检查；CI 对 macOS、Windows、Linux 配置相同命令。发布前可用 `npm pack --dry-run` 核对文件清单。
+v1.2.0 发布前，完整回归套件在 Windows 本机连续 3 轮 113/113 通过（见 [验证记录](docs/VERIFICATION.md)）。按发版要求，仓库不再附带测试文件；`npm run check` 仍执行语法检查与包清单/本地化校验。发布前可用 `npm pack --dry-run` 核对文件清单。
 
-测试方法、结果、已归档项目与尚未验证的范围统一记录在 [验证记录](docs/VERIFICATION.md)。测试代码保留在开发仓库，不进入插件发布包。
+测试方法、结果、已归档项目与尚未验证的范围统一记录在 [验证记录](docs/VERIFICATION.md)。
 
 ### 常见问题（FAQ）
 
@@ -298,8 +288,8 @@ npm run check     # 语法检查合集
 **问：为什么 Settings 里「知识中心」前面的图标还是齿轮？**
 Harness 0.2.1-rc.3 的 Settings 导航图标由内置 shell 按 section id 硬编码（`account`/`models`/`plugins`/`agent-presets`/`archived-sessions`），第三方 Settings 分区没有自定义 icon API，统一回退为齿轮。因此插件把定制的知识图标放在官方支持的**侧边栏面板入口**上；若未来 Harness 暴露 Settings section icon 字段，会切换过去。
 
-**问：为什么仓库里保留 `test/`？**
-CI 与可复现性需要；测试无第三方依赖。如果只想使用发布包，`npm pack`/安装不受影响，发布包不包含 `test/`。
+**问：仓库里为什么没有测试文件了？**
+v1.2.0 发布前在本机连续 3 轮 113/113 通过后，按要求移除了测试目录；`npm run check` 仍做语法与包清单/本地化校验，验证记录见 [验证记录](docs/VERIFICATION.md)。
 
 **问：知识文件里会不会包含我的绝对路径？**
 不会。front matter 不含 workspace 绝对路径，`sources` 是工作区相对路径；绝对路径只保存在本机 `index.json`。
@@ -373,7 +363,7 @@ The interaction model is inspired by Qoder CN's knowledge features:
 
 Notes:
 
-- Text documents are capped at 10 MiB and binary documents at 25 MiB; extracted text is capped at 400k characters and then bounded by the distillation budget (12k × 16 ≈ 192k characters). Content beyond the budget is not sent to the model and is marked `truncated: true` in the front matter: a 10 MiB file is accepted and distilled from a representative part of the budget instead of being read end to end (which would need hundreds of model calls).
+- Text documents are capped at 10 MiB and binary documents at 25 MiB; extracted text is capped at 400k characters and then bounded by the distillation budget (12k × 16 ≈ 192k characters). Content beyond the budget is not sent to the model and is marked `truncated: true` in the front matter: a 10 MiB file is accepted and distilled from the first part of the budget instead of being read end to end (which would need hundreds of model calls).
 - OOXML/PDF decompression is capped at 16 MiB per entry/stream and 64 MiB in total. Unused OOXML media is skipped. Conflicting font mappings in the PDF fallback produce a clear error; use pdftotext for those files.
 - PDF extraction reads the **text layer** only; scanned/image-only PDFs and text inside embedded images (Word/PPT) need OCR and are out of scope.
 - Legacy `.doc/.xls/.ppt` require the `office-to-pdf` service enabled in the Harness profile (shipped with Desktop); a clear error is returned when it is unavailable.
@@ -534,10 +524,10 @@ The plugin uses no macOS-specific API; the Host half runs in Harness's Node.js H
 | Platform | Support | Notes |
 | --- | --- | --- |
 | macOS | ✅ | End-to-end verified locally (install, distillation, retrieval, RPC, Settings registration) |
-| Windows | ✅ (design target) | Paths use `node:path` win32 rules: drive/UNC roots, `\` separators, case-insensitive comparisons; the data directory comes from `DSH_HOME` or `os.homedir()`. CI runs syntax checks and path unit tests on windows-latest; full UI end-to-end verification on a real Windows machine is still pending |
-| Linux | ✅ (design target) | POSIX path rules, identical to macOS; CI runs syntax checks and path unit tests on ubuntu-latest; full UI end-to-end verification on a real Linux machine is still pending |
+| Windows | ✅ (design target) | Paths use `node:path` win32 rules: drive/UNC roots, `\` separators, case-insensitive comparisons; the data directory comes from `DSH_HOME` or `os.homedir()`. CI runs syntax and manifest checks on windows-latest; full UI end-to-end verification on a real Windows machine is still pending |
+| Linux | ✅ (design target) | POSIX path rules, identical to macOS; CI runs syntax and manifest checks on ubuntu-latest; full UI end-to-end verification on a real Linux machine is still pending |
 
-All platform-sensitive logic is centralized in `lib/paths.js` (`canonicalPath`, `comparisonKey`, `isSameOrInside`, `normalizeSourcePath`, `sourceKey`, `resolveDshHome`) and covered by `test/paths.test.mjs`, which tests `win32`, `darwin` and POSIX rules explicitly: Windows/macOS compare case-insensitively, Linux stays case-sensitive, and source paths are normalized to forward slashes before deduplication.
+All platform-sensitive logic is centralized in `lib/paths.js` (`canonicalPath`, `comparisonKey`, `isSameOrInside`, `normalizeSourcePath`, `sourceKey`, `resolveDshHome`) and validated for `win32`, `darwin` and POSIX rules explicitly (covered by the shipped tests before v1.2.0): Windows/macOS compare case-insensitively, Linux stays case-sensitive, and source paths are normalized to forward slashes before deduplication.
 
 ### Known limitations
 
@@ -559,15 +549,6 @@ dsh-knowledge-center/
 ├── client.js                # Client half: sidebar icon + full-page panel + Settings page + Markdown renderer
 ├── cordis.patch.yml         # DSH bundle patch (inserts the Host row; Cordis is Harness's plugin framework, unrelated to Qoder)
 ├── locale/                  # plugin inventory title/description (en / zh)
-├── test/paths.test.mjs      # cross-platform path unit tests
-├── test/text.test.mjs       # chunk character-budget unit tests
-├── test/manifest.test.mjs   # manifest / packaging / license consistency tests
-├── test/extract.test.mjs    # document extraction regressions
-├── test/client-behavior.test.mjs # request ordering, drafts, search and keyboard behavior
-├── test/host.test.mjs       # RPC, permissions, generation and retrieval
-├── test/lock.test.mjs       # process coordination and lock recovery
-├── test/store-recovery.test.mjs # index backup and recovery
-├── test/helpers/           # React/RPC environment for core behavioral tests
 ├── scripts/                # cross-platform test and syntax-check entry points
 ├── docs/VERIFICATION.md    # verification methods, results and limits
 ├── .github/workflows/ci.yml # three-platform CI (syntax + JSON + tests)
@@ -582,7 +563,6 @@ node --check client.js
 node --check lib/paths.js
 node --check lib/text.js
 node --check lib/extract.js
-npm test          # behavior, storage, permissions, concurrency, extraction and baseline regressions
 npm run check     # aggregated syntax checks
 ```
 
@@ -594,9 +574,9 @@ Development notes:
 
 ### Testing and verification
 
-Run `npm test` for core regressions and `npm run check` for syntax checks. CI is configured to run the same commands on macOS, Windows and Linux. Use `npm pack --dry-run` to inspect the release inventory.
+Before v1.2.0 the full regression suite passed 113/113 three times in a row on Windows (see the [verification log](docs/VERIFICATION.md)). The release no longer ships test files; `npm run check` still runs syntax, manifest and locale checks. Use `npm pack --dry-run` to inspect the release inventory.
 
-Methods, results, archived checks and verification limits are recorded in the [verification log](docs/VERIFICATION.md). Tests remain in the development repository and are excluded from the plugin package.
+Methods, results, archived checks and verification limits are recorded in the [verification log](docs/VERIFICATION.md).
 
 ### FAQ
 
@@ -606,8 +586,8 @@ No. Cordis (`@deepseek-ai/cordis`) is DeepSeek Harness's plugin framework; `cord
 **Q: Why is the Settings nav icon for Knowledge Center still a gear?**
 Harness 0.2.1-rc.3 hardcodes Settings nav icons by section id (`account`/`models`/`plugins`/`agent-presets`/`archived-sessions`); third-party Settings sections have no icon API and fall back to a gear. The plugin therefore places its custom knowledge icon on the officially supported **sidebar panel entry**; if a future Harness exposes a Settings section icon field, we will switch.
 
-**Q: Why are the tests committed?**
-CI and reproducibility; the suite has no third-party dependencies. If you only consume the published package, `npm pack`/installation is unaffected because the package excludes `test/`.
+**Q: Why are there no test files anymore?**
+The suite passed 113/113 three times in a row before v1.2.0 and was then removed as requested; `npm run check` still validates syntax, manifest and locales, and the [verification log](docs/VERIFICATION.md) keeps the evidence.
 
 **Q: Do knowledge files contain my absolute paths?**
 No. The front matter has no absolute workspace path; `sources` are workspace-relative. Absolute paths stay in the local `index.json`.

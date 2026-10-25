@@ -87,3 +87,11 @@ git diff --check
 ```
 
 Results here describe local automated checks. They do not certify real-model calls, GUI layout, remote CI success or live Linux behavior. Development tests and local archives are excluded from the plugin package.
+
+## v1.2.0 发布验收（2026-10-25）
+
+- 变更：提炼调用改为 32000 → 64000 输出预算阶梯，仍然截断才把这一次调用降为 `high`；实际生效的 `effort` 写入笔记 front matter（`distillEffort`）与条目元数据；`knowledge_read` 工具输出新增 `truncated` / `sourceChars` / `distillEffort`。文本文件上限 10 MiB，分片预算 16 段（约 192k 字符）。
+- 回归：Windows 本机完整套件连续 3 轮 113/113 通过（Node.js 24.16.0）。
+- 发布检查：`npm run check` 通过（7 个文件语法 + 包清单/本地化校验）；`npm pack --dry-run` 为 14 个文件，版本 1.2.0。
+- 发版处理：按发布要求删除 `test/` 与 `scripts/test.mjs`，CI 保留语法与清单校验。
+- 未验证：宿主重启后真实模型 `reasoningEffort: max` 的实跑、10 MiB 端到端、三平台 CI；这些仍需发布后由实机与 CI 确认。

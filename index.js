@@ -455,7 +455,7 @@ async function completeOnce(llm, { selection, system, prompt, maxTokens, signal 
     throw error
   }
   if (text.trim().length === 0) throw new Error('The model returned an empty distillation result.')
-  return text
+  return { text, effort: selection.reasoningEffort ?? 'default', maxTokens, finishReason }
 }
 
 /**
@@ -481,12 +481,27 @@ async function generateText(ctx, { system, prompt, signal, selection = pickModel
     attempts.push({ selection: { ...selection, reasoningEffort: 'high' }, maxTokens: KNOWLEDGE_MAX_TOKENS })
   }
   let lastError
-  for (const attempt of attempts) {
+  for (const [index, attempt] of attempts.entries()) {
     try {
-      const text = await completeOnce(llm, { ...attempt, system, prompt, signal })
-      return { text, model: selection }
+      const result = await completeOnce(llm, { ...attempt, system, prompt, signal })
+      return {
+        ...result,
+        model: selection,
+        attempt: {
+          index: index + 1,
+          attempts: attempts.length,
+          effort: result.effort,
+          maxTokens: result.maxTokens,
+          finishReason: result.finishReason,
+        },
+      }
     } catch (error) {
-      if (error.code !== 'KNOWLEDGE_TRUNCATED') throw error
+      if (signal?.aborted) throw error
+      // A truncated note is always worth retrying. An error raised by the
+      // enlarged attempt (for example a provider that rejects 64000 max tokens)
+      // also falls through to the more conservative attempt instead of failing
+      // the whole document; an error on the base attempt is reported at once.
+      if (error.code !== 'KNOWLEDGE_TRUNCATED' && index === 0) throw error
       lastError = error
     }
   }
@@ -632,6 +647,8 @@ async function distillDocument(ctx, { text, relPath, language, signal }) {
     summary: deriveSummary(normalized.markdown),
     model: result.model,
     truncated,
+    sourceChars: cleaned.length,
+    distill: result.attempt,
   }
 }
 
@@ -817,6 +834,9 @@ function entryMetadata(index, entry) {
     updatedAt: entry.updatedAt,
     size: entry.size ?? 0,
     generator: entry.generator ?? '',
+    truncated: entry.truncated === true,
+    sourceChars: entry.sourceChars ?? 0,
+    distillEffort: entry.distill?.effort ?? '',
   }
 }
 
@@ -900,6 +920,9 @@ async function ingestDocument(ctx, store, { workspace, collection, relativePath,
       createdAt,
       updatedAt: now,
       generator,
+      truncated: distilled.truncated === true,
+      sourceChars: distilled.sourceChars ?? 0,
+      distill: distilled.distill,
     }
     // The shareable Markdown note deliberately omits the machine-absolute
     // workspace path; provenance stays in the local index.json only.
@@ -916,6 +939,8 @@ async function ingestDocument(ctx, store, { workspace, collection, relativePath,
       updatedAt: now,
       generator,
       ...(distilled.truncated ? { truncated: true } : {}),
+      ...(distilled.sourceChars === undefined ? {} : { sourceChars: distilled.sourceChars }),
+      ...(distilled.distill?.effort === undefined ? {} : { distillEffort: distilled.distill.effort }),
     }
     const fileContent = `${serializeFrontmatter(frontmatter)}\n\n${distilled.markdown}`
     record.size = Buffer.byteLength(fileContent)
@@ -1068,6 +1093,9 @@ const READ_OUTPUT = {
     sources: { type: 'array', items: { type: 'string' } },
     updatedAt: { type: 'string' },
     markdown: { type: 'string' },
+    truncated: { type: 'boolean' },
+    sourceChars: { type: 'number' },
+    distillEffort: { type: 'string' },
   },
   required: ['id', 'title', 'markdown'],
 }
@@ -1656,6 +1684,9 @@ export function apply(ctx) {
         sources: entry.sources,
         updatedAt: isoTime(entry.updatedAt),
         markdown: parsed.body,
+        truncated: entry.truncated === true,
+        sourceChars: entry.sourceChars ?? 0,
+        distillEffort: entry.distill?.effort ?? '',
       }
     },
     isConcurrencySafe: () => true,
