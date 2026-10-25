@@ -909,9 +909,10 @@ window.__ModuleLoader__.load({
         try {
           await callRpc(ctx, 'deleteEntry', { id })
           setPendingDelete(null)
-          setNotice(tr(t, 'entryDeleted'))
           detailMutationRef.current = false
           closeDetail()
+          // closeDetail clears notifications; surface the upload after it runs.
+          setNotice(tr(t, 'entryDeleted'))
           await reload()
         } catch (failure) {
           setDetailError(errorMessage(failure))
@@ -1430,7 +1431,7 @@ window.__ModuleLoader__.load({
           setShareError(errorMessage(failure))
         }
       }
-      useEffect(() => { loadShares() }, [])
+      useEffect(() => { loadShares() }, [data?.totals?.collections])
 
       const isShared = (collection, workspace) => (collection.readers ?? []).some(
         (reader) => String(reader).toLowerCase() === String(workspace.path).toLowerCase(),

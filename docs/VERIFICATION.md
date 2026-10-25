@@ -147,3 +147,7 @@ Results here describe local automated checks. They do not certify real-model cal
 
 - 模型侧搜索隐藏来源 workspacePath；owner UI 保留；共享库标签正确。
 - 本地回归 123/123。
+
+### v1.8.2（UI 状态收口）
+
+- 删除提示顺序修正；共享卡片随集合数量刷新。本地回归 123/123。
