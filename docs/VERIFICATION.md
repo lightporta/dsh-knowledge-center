@@ -151,3 +151,8 @@ Results here describe local automated checks. They do not certify real-model cal
 ### v1.8.2（UI 状态收口）
 
 - 删除提示顺序修正；共享卡片随集合数量刷新。本地回归 123/123。
+
+### v1.8.3（共享删除警告 + 大附件实机）
+
+- 共享库删除确认显示受影响工作区数量。
+- 9 MB docx 实机成功（max 回执）；26 MiB PDF 被 25 MiB 上限拒绝。本地回归 123/123。

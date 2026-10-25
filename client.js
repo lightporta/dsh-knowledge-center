@@ -44,6 +44,7 @@ window.__ModuleLoader__.load({
       confirmDelete: '确认删除',
       deleteEntryTitle: '删除这条知识？',
       deleteCollectionTitle: '删除该知识库及其全部知识？',
+      deleteSharedWarning: '删除共享库？{count} 个工作区将立即失去访问。',
       updatedAt: '更新于 {time}',
       collection: '知识库',
       sources: '来源',
@@ -155,6 +156,7 @@ window.__ModuleLoader__.load({
       confirmDelete: 'Confirm delete',
       deleteEntryTitle: 'Delete this note?',
       deleteCollectionTitle: 'Delete this knowledge base and all its notes?',
+      deleteSharedWarning: 'Delete this shared library? {count} workspace(s) lose access immediately.',
       updatedAt: 'Updated {time}',
       collection: 'Knowledge base',
       sources: 'Sources',
@@ -1011,7 +1013,10 @@ window.__ModuleLoader__.load({
         if (pendingDelete === `collection:${collection.id}`) {
           return h('span', { key: collection.id, className: 'kc-row' },
             chip,
-            h('button', { type: 'button', className: 'kc-btn kc-btn-small kc-btn-danger', disabled: busy, onClick: () => deleteCollection(collection.id) }, tr(t, 'confirmDelete')),
+             h('span', { className: 'kc-warn' }, collection.scope === 'shared'
+              ? tr(t, 'deleteSharedWarning', { count: (collection.readers ?? []).length })
+              : tr(t, 'deleteCollectionTitle')),
+           h('button', { type: 'button', className: 'kc-btn kc-btn-small kc-btn-danger', disabled: busy, onClick: () => deleteCollection(collection.id) }, tr(t, 'confirmDelete')),
             h('button', { type: 'button', className: 'kc-btn kc-btn-small', onClick: () => setPendingDelete(null) }, tr(t, 'cancel')))
         }
         return h('span', { key: collection.id, className: 'kc-row' },

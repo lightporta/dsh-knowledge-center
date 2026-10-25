@@ -122,3 +122,10 @@ v1.2.0 发布前同一套件在 Windows（Node.js 22.23.4 与 24.16.0）下连�
 
 - 删除条目成功后提示不再被 `closeDetail()` 清空（先关闭详情，再提示）。
 - 共享库卡片随知识库数量变化自动刷新，避免删除/新建知识库后列表陈旧。
+
+## v1.8.3（共享删除警告 + 大附件实机）
+
+- 共享库删除确认新增警告：显示“删除共享库？N 个工作区将立即失去访问”；`state().collections` 暴露 readers 供计数。
+- 9 MB docx 实机（大媒体 + 75 字符正文）：入库成功，2252 字节笔记，`distillEffort=max`，`truncated=false`。
+- 26 MiB PDF 实机：拒绝，错误 `Attachment is larger than 25 MiB`。
+- 说明：当时宿主仍加载 v1.8.0 之前的代码，来源写作 `附件/big-9mb.docx`；重启后新附件使用 `附件/<sha12>-<name>`。
