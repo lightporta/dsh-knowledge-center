@@ -753,7 +753,8 @@ async function scanWorkspaceDocuments(ctx, workspacePath) {
 /**
  * Resolve an optional native helper (currently `pdftotext`) through the
  * Harness subprocess environment; an unresolvable helper falls back to the
- * built-in PDF parser.
+ * built-in PDF parser. Windows installs that are not on PATH (winget Poppler,
+ * Git's mingw tools) are detected by their well-known locations.
  */
 function createExecutableResolver(ctx) {
   return async (command) => {
@@ -761,9 +762,57 @@ function createExecutableResolver(ctx) {
     if (typeof override === 'string' && override.length > 0) return override
     const subprocess = ctx.get('subprocess')
     if (subprocess !== undefined && typeof subprocess.resolveExecutable === 'function') {
-      return subprocess.resolveExecutable(command)
+      const resolved = await subprocess.resolveExecutable(command)
+      if (typeof resolved === 'string' && resolved.length > 0) return resolved
     }
+    if (command === 'pdftotext') return await findPdfToTextBinary()
     return command
+  }
+}
+
+/** Search one directory tree for an exact file name, bounded by `depth`. */
+async function findNestedFile(directory, name, depth) {
+  if (depth < 0) return undefined
+  let entries
+  try {
+    entries = await fsp.readdir(directory, { withFileTypes: true })
+  } catch {
+    return undefined
+  }
+  for (const entry of entries) {
+    const path = join(directory, entry.name)
+    if (entry.isFile() && entry.name === name) return path
+    if (entry.isDirectory()) {
+      const nested = await findNestedFile(path, name, depth - 1)
+      if (nested !== undefined) return nested
+    }
+  }
+  return undefined
+}
+
+/** Well-known Windows locations for `pdftotext`, used when it is not on PATH. */
+async function findPdfToTextBinary() {
+  if (process.platform !== 'win32') return undefined
+  const local = process.env.LOCALAPPDATA
+  if (typeof local === 'string' && local.length > 0) {
+    const packages = join(local, 'Microsoft', 'WinGet', 'Packages')
+    let entries = []
+    try {
+      entries = await fsp.readdir(packages)
+    } catch {
+      entries = []
+    }
+    for (const entry of entries.filter((name) => name.startsWith('oschwartz10612.Poppler'))) {
+      const found = await findNestedFile(join(packages, entry), 'pdftotext.exe', 6)
+      if (found !== undefined) return found
+    }
+  }
+  const gitGuess = 'C:\\Program Files\\Git\\mingw64\\bin\\pdftotext.exe'
+  try {
+    await fsp.stat(gitGuess)
+    return gitGuess
+  } catch {
+    return undefined
   }
 }
 
