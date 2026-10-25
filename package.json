@@ -1,0 +1,56 @@
+{
+  "name": "dsh-knowledge-center",
+  "version": "1.0.0",
+  "description": "Knowledge Center (知识中心) plugin for DeepSeek Harness: distill workspace documents into Markdown knowledge notes, preview them like VS Code, and let permitted workspaces use them through agent tools.",
+  "type": "module",
+  "license": "MIT",
+  "author": "dsh-knowledge-center contributors",
+  "keywords": [
+    "deepseek",
+    "deepseek-harness",
+    "dsh",
+    "dsh-plugin",
+    "knowledge-center",
+    "knowledge-base",
+    "repo-wiki",
+    "markdown",
+    "agent-tools"
+  ],
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.png",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.js",
+    "lib/*.js",
+    "client.js",
+    "cordis.patch.yml",
+    "locale/*.json",
+    "icon.png",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "test": "node --test",
+    "check": "node --check index.js && node --check client.js && node --check lib/paths.js && node --check lib/text.js && node --check lib/extract.js && node --check test/paths.test.mjs && node --check test/text.test.mjs && node --check test/manifest.test.mjs && node --check test/client-bundle.test.mjs && node --check test/extract.test.mjs"
+  },
+  "engines": {
+    "node": ">=20.0.0",
+    "dsh": ">=0.2.1-rc.3"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-settings-shell"
+      ]
+    }
+  }
+}

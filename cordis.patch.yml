@@ -1,0 +1,8 @@
+# dsh-knowledge-center bundle patch.
+#
+# One Host row owns storage, distillation, agent tools and the browser RPC
+# route; the same package's `dsh.client` declaration registers the Settings
+# page in the Harness Web UI.
+- insert:
+    - id: knowledge-center
+      name: 'dsh-knowledge-center'

@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Knowledge Center",
+    "description": "Distill workspace documents into knowledge notes with VS Code-like rendering; open it from the sidebar knowledge icon or Settings, and let permitted workspaces use it through agent tools."
+  }
+}
