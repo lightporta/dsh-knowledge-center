@@ -13,7 +13,6 @@
  *   entries/<id>.md       one knowledge note, YAML front matter + Markdown body
  */
 import { promises as fsp } from 'node:fs'
-import { existsSync } from 'node:fs'
 import { join, basename, extname } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import {
@@ -23,8 +22,10 @@ import {
   normalizeSourcePath,
   resolveDshHome,
   sourceKey,
+  workspaceSourcePath,
 } from './lib/paths.js'
 import { chunkText } from './lib/text.js'
+import { withFileLock } from './lib/lock.js'
 import {
   DOCUMENT_EXTENSIONS,
   LEGACY_OFFICE_EXTENSIONS,
@@ -159,6 +160,17 @@ function makeSnippet(body, tokens) {
   return plainText(body.slice(start, start + 260))
 }
 
+function searchTokens(query) {
+  const tokens = new Set(query.split(/\s+/).filter(Boolean))
+  if (/\p{Script=Han}/u.test(query)) {
+    const segmenter = new Intl.Segmenter('zh', { granularity: 'word' })
+    for (const { segment, isWordLike } of segmenter.segment(query)) {
+      if (isWordLike && segment.length > 1) tokens.add(segment)
+    }
+  }
+  return [...tokens]
+}
+
 // ────────────────────────────────────────────────────────────────────────────
 // Front matter (flat YAML subset, JSON-compatible scalars/arrays)
 // ────────────────────────────────────────────────────────────────────────────
@@ -219,8 +231,8 @@ function ensureShape(index) {
   const safe = index !== null && typeof index === 'object' ? index : createEmptyIndex()
   if (!Array.isArray(safe.collections)) safe.collections = []
   if (!Array.isArray(safe.entries)) safe.entries = []
-  if (safe.permissions === null || typeof safe.permissions !== 'object') safe.permissions = {}
-  if (safe.settings === null || typeof safe.settings !== 'object') safe.settings = { outputLanguage: 'zh' }
+  if (safe.permissions === null || typeof safe.permissions !== 'object' || Array.isArray(safe.permissions)) safe.permissions = {}
+  if (safe.settings === null || typeof safe.settings !== 'object' || Array.isArray(safe.settings)) safe.settings = { outputLanguage: 'zh' }
   if (typeof safe.settings.outputLanguage !== 'string') safe.settings.outputLanguage = 'zh'
   const hasUserCollection = safe.collections.some((collection) => collection.scope === 'user')
   if (!hasUserCollection) {
@@ -241,6 +253,8 @@ class KnowledgeStore {
     this.root = join(resolveDshHome(), 'knowledge-center')
     this.entriesDir = join(this.root, 'entries')
     this.indexPath = join(this.root, 'index.json')
+    this.backupPath = join(this.root, 'index.json.bak')
+    this.lockPath = join(this.root, 'index.lock')
     this.queue = Promise.resolve()
     this.ready = this.#initialize()
   }
@@ -248,64 +262,104 @@ class KnowledgeStore {
   #initialize() {
     return (async () => {
       await fsp.mkdir(this.entriesDir, { recursive: true })
-      if (!existsSync(this.indexPath)) {
-        const index = ensureShape(createEmptyIndex())
-        await this.#writeIndex(index)
-        return
-      }
-      await this.#readIndex()
-    })().catch((error) => {
-      this.initError = error
+      await withFileLock(this.lockPath, () => this.#readIndex())
+    })()
+  }
+
+  /** Only missing files and invalid JSON/schema are recoverable read results. */
+  async #readCandidate(path) {
+    let raw
+    try {
+      raw = await fsp.readFile(path, 'utf8')
+    } catch (error) {
+      if (error.code === 'ENOENT') return { kind: 'missing' }
+      // Permission, directory and other I/O failures must not change any data.
       throw error
-    })
+    }
+    try {
+      const parsed = JSON.parse(raw)
+      const records = (value) => Array.isArray(value) && value.every((record) => record !== null && typeof record === 'object' && !Array.isArray(record))
+      if (parsed === null || typeof parsed !== 'object' || !records(parsed.collections) || !records(parsed.entries)) {
+        return { kind: 'invalid' }
+      }
+      return { kind: 'valid', raw, index: ensureShape(parsed) }
+    } catch (error) {
+      if (error instanceof SyntaxError) return { kind: 'invalid' }
+      throw error
+    }
   }
 
   async #readIndex() {
-    try {
-      const raw = await fsp.readFile(this.indexPath, 'utf8')
-      const parsed = JSON.parse(raw)
-      if (parsed === null || typeof parsed !== 'object' || !Array.isArray(parsed.collections) || !Array.isArray(parsed.entries)) {
-        throw new Error('invalid knowledge index shape')
+    const primary = await this.#readCandidate(this.indexPath)
+    if (primary.kind === 'valid') return primary.index
+    const backup = await this.#readCandidate(this.backupPath)
+    if (backup.kind === 'valid') {
+      const recovered = backup.index
+      // An older backup may predate a permission revocation. Never restore its
+      // grants; preserving notes does not authorize the model to access them.
+      recovered.permissions = {}
+      recovered.recovery = {
+        recoveredAt: Date.now(),
+        source: 'backup',
+        reason: primary.kind === 'missing' ? 'missing-primary' : 'invalid-primary',
+        permissionsReset: true,
       }
-      return ensureShape(parsed)
-    } catch (error) {
-      if (error !== null && typeof error === 'object' && error.code === 'ENOENT') {
-        const fresh = ensureShape(createEmptyIndex())
-        await this.#writeIndex(fresh)
-        return fresh
-      }
-      const corrupt = `${this.indexPath}.corrupt-${Date.now()}`
-      try {
+      if (primary.kind === 'invalid') {
+        const corrupt = `${this.indexPath}.corrupt-${Date.now()}-${randomUUID()}`
         await fsp.rename(this.indexPath, corrupt)
-      } catch {
-        // best effort
+        recovered.recovery.corruptFile = basename(corrupt)
       }
+      recovered.updatedAt = Date.now()
+      // Restore directly: rotating the damaged primary into the backup here
+      // would destroy the only verified good copy.
+      await this.#writeAtomic(this.indexPath, `${JSON.stringify(recovered, null, 2)}\n`)
+      return recovered
+    }
+    const notes = await fsp.readdir(this.entriesDir)
+    const files = await fsp.readdir(this.root)
+    const newStorage = notes.length === 0 && files.every((file) => file === 'entries' || file === 'index.lock' || file.startsWith('index.lock.candidate-'))
+    if (primary.kind === 'missing' && backup.kind === 'missing' && newStorage) {
       const fresh = ensureShape(createEmptyIndex())
-      await this.#writeIndex(fresh)
+      await this.#writeAtomic(this.indexPath, `${JSON.stringify(fresh, null, 2)}\n`)
       return fresh
+    }
+    const error = new Error(`Knowledge index cannot be recovered (${primary.kind} primary, ${backup.kind} backup). Existing index and knowledge files were preserved in ${this.root}. Restore a valid index backup before retrying; if initialization failed, restart Harness after repair.`)
+    error.code = 'KNOWLEDGE_INDEX_UNRECOVERABLE'
+    throw error
+  }
+
+  async #writeAtomic(path, raw) {
+    const temporary = `${path}.tmp-${randomUUID()}`
+    try {
+      await fsp.writeFile(temporary, raw, 'utf8')
+      await fsp.rename(temporary, path)
+    } finally {
+      await fsp.rm(temporary, { force: true })
     }
   }
 
   async #writeIndex(index) {
+    const previous = await this.#readCandidate(this.indexPath)
+    if (previous.kind !== 'valid') throw new Error('Knowledge index changed before commit; no index files were replaced.')
+    // Preserve the exact verified previous version before publishing an update.
+    await this.#writeAtomic(this.backupPath, previous.raw)
     index.updatedAt = Date.now()
-    const temporary = `${this.indexPath}.tmp-${randomUUID()}`
-    await fsp.writeFile(temporary, `${JSON.stringify(index, null, 2)}\n`, 'utf8')
-    await fsp.rename(temporary, this.indexPath)
+    await this.#writeAtomic(this.indexPath, `${JSON.stringify(index, null, 2)}\n`)
   }
 
   async readIndex() {
     await this.ready
-    return this.#readIndex()
+    return withFileLock(this.lockPath, () => this.#readIndex())
   }
 
   async mutate(operation) {
     await this.ready
-    const run = this.queue.then(async () => {
+    const run = this.queue.then(() => withFileLock(this.lockPath, async () => {
       const index = await this.#readIndex()
       const result = await operation(index)
       await this.#writeIndex(index)
       return result
-    })
+    }))
     this.queue = run.then(
       () => undefined,
       () => undefined,
@@ -347,7 +401,11 @@ function pickModel(ctx) {
     try {
       const selection = service.currentSelection()
       if (selection !== undefined && typeof selection.provider === 'string' && typeof selection.model === 'string') {
-        return { provider: selection.provider, model: selection.model }
+        return {
+          provider: selection.provider,
+          model: selection.model,
+          ...(selection.reasoningEffort === undefined ? {} : { reasoningEffort: selection.reasoningEffort }),
+        }
       }
     } catch {
       // fall through
@@ -362,18 +420,17 @@ function modelLabel(ctx) {
   return `${selection.provider}/${selection.model}`
 }
 
-async function generateText(ctx, { system, prompt, signal }) {
+async function generateText(ctx, { system, prompt, signal, selection = pickModel(ctx) }) {
   const llm = ctx.get('llm')
   if (llm === undefined || llm === null) {
     throw new Error('Knowledge Center needs the LLM service to distill documents, but it is unavailable in this profile.')
   }
-  const selection = pickModel(ctx)
   if (selection === undefined) {
     throw new Error('Knowledge Center needs a default model. Configure one in Settings → Models first.')
   }
   const timeout = AbortSignal.timeout(KNOWLEDGE_TIMEOUT_MS)
   const combined = signal === undefined ? timeout : AbortSignal.any([signal, timeout])
-  const call = await llm.prepareCall({ provider: selection.provider, model: selection.model, maxTokens: 3000 }, combined)
+  const call = await llm.prepareCall({ ...selection, maxTokens: 3000 }, combined)
   const options = {
     ...call.config,
     messages: [{ role: 'user', content: [{ type: 'text', text: prompt }] }],
@@ -382,13 +439,17 @@ async function generateText(ctx, { system, prompt, signal }) {
   }
   let text = ''
   let failure
+  let finishReason
   for await (const chunk of call.stream(options)) {
     if (chunk.type === 'text-delta') text += chunk.text
-    else if (chunk.type === 'finish' && (chunk.reason.kind === 'error' || chunk.reason.kind === 'aborted')) {
-      failure = chunk.reason.failure
+    else if (chunk.type === 'finish') {
+      finishReason = chunk.reason.kind
+      if (finishReason === 'error' || finishReason === 'aborted') failure = chunk.reason.failure
     }
   }
+  combined.throwIfAborted()
   if (failure !== undefined) throw new Error(`Model call failed: ${failure.message}`)
+  if (finishReason !== 'stop') throw new Error(`Model did not complete the knowledge note (${finishReason ?? 'missing finish reason'}). Existing knowledge was not replaced.`)
   if (text.trim().length === 0) throw new Error('The model returned an empty distillation result.')
   return { text, model: selection }
 }
@@ -494,6 +555,7 @@ function normalizeKnowledgeMarkdown(raw, fallbackTitle, relPath, language) {
 }
 
 async function distillDocument(ctx, { text, relPath, language, signal }) {
+  const selection = pickModel(ctx)
   const cleaned = stripFrontmatter(text)
   const title = deriveTitle(cleaned, relPath)
   const { chunks, truncated } = chunkText(cleaned, MAX_CHUNK_CHARS, MAX_CHUNKS)
@@ -503,6 +565,7 @@ async function distillDocument(ctx, { text, relPath, language, signal }) {
       system: curatorSystem(language),
       prompt: directPrompt({ language, title, relPath, content: chunks[0] }),
       signal,
+      selection,
     })
   } else {
     const notes = []
@@ -511,6 +574,7 @@ async function distillDocument(ctx, { text, relPath, language, signal }) {
         system: curatorSystem(language),
         prompt: extractPrompt({ language, relPath, index: index + 1, total: chunks.length, content: chunks[index] }),
         signal,
+        selection,
       })
       notes.push(extraction.text.trim())
       result = extraction
@@ -519,6 +583,7 @@ async function distillDocument(ctx, { text, relPath, language, signal }) {
       system: curatorSystem(language),
       prompt: mergePrompt({ language, title, relPath, notes }),
       signal,
+      selection,
     })
   }
   const normalized = normalizeKnowledgeMarkdown(result.text, title, relPath, language)
@@ -542,6 +607,13 @@ function findWorkspace(ctx, pathOrId) {
   return workspaces.find(
     (workspace) => comparisonKey(workspace.path) === targetKey || String(workspace.id) === String(pathOrId),
   )
+}
+
+/** Resolve subdirectory sessions to their most specific registered workspace. */
+function findSessionWorkspace(ctx, cwd) {
+  return ctx.workspaceRegistry.list()
+    .filter((workspace) => isSameOrInside(workspace.path, cwd))
+    .sort((left, right) => canonicalPath(right.path).length - canonicalPath(left.path).length)[0]
 }
 
 async function requireWorkspace(ctx, pathOrId) {
@@ -673,7 +745,7 @@ function accessibleCollectionIds(index, cwd) {
   const ids = new Set()
   for (const collection of index.collections) {
     if (collection.scope === 'user') ids.add(collection.id)
-    else if (collection.scope === 'workspace' && typeof collection.workspacePath === 'string' && isSameOrInside(collection.workspacePath, cwd)) {
+    else if (collection.scope === 'workspace' && comparisonKey(collection.workspacePath) === comparisonKey(cwd)) {
       ids.add(collection.id)
     }
   }
@@ -687,8 +759,8 @@ function allowedWorkspaceEntries(index) {
 }
 
 function isWorkspaceGranted(index, cwd) {
-  const target = canonicalPath(cwd)
-  return allowedWorkspaceEntries(index).some((allowed) => isSameOrInside(allowed, target))
+  const target = comparisonKey(cwd)
+  return target !== '' && allowedWorkspaceEntries(index).some((allowed) => comparisonKey(allowed) === target)
 }
 
 function entryMetadata(index, entry) {
@@ -714,14 +786,14 @@ async function resolveCollectionForIngest(store, workspace, collectionId) {
     const index = await store.readIndex()
     const collection = index.collections.find((candidate) => candidate.id === collectionId)
     if (collection === undefined) throw new Error(`Unknown knowledge base: ${collectionId}`)
-    if (collection.scope === 'workspace' && !isSameOrInside(collection.workspacePath ?? '', workspace.path)) {
+    if (collection.scope === 'workspace' && comparisonKey(collection.workspacePath) !== comparisonKey(workspace.path)) {
       throw new Error(`Knowledge base "${collection.name}" belongs to another workspace.`)
     }
     return collection
   }
   return store.mutate((index) => {
     let collection = index.collections.find(
-      (candidate) => candidate.scope === 'workspace' && typeof candidate.workspacePath === 'string' && isSameOrInside(candidate.workspacePath, canonicalPath(workspace.path)),
+      (candidate) => candidate.scope === 'workspace' && comparisonKey(candidate.workspacePath) === comparisonKey(workspace.path),
     )
     if (collection !== undefined) return collection
     const now = Date.now()
@@ -743,7 +815,7 @@ async function resolveCollectionForIngest(store, workspace, collectionId) {
  * Re-running the same source updates the existing entry (Repo-Wiki style).
  */
 async function ingestDocument(ctx, store, { workspace, collection, relativePath, language, signal }) {
-  const sourcePath = normalizeSourcePath(relativePath)
+  const sourcePath = workspaceSourcePath(workspace.path, relativePath)
   if (sourcePath.length === 0) throw new Error('Source path must point to a workspace document.')
   const source = await readWorkspaceSource(ctx, workspace.path, sourcePath, {
     signal,
@@ -758,6 +830,12 @@ async function ingestDocument(ctx, store, { workspace, collection, relativePath,
   })
   const generator = distilled.model === undefined ? '' : `${distilled.model.provider}/${distilled.model.model}`
   return store.mutate(async (index) => {
+    signal?.throwIfAborted()
+    const target = index.collections.find((candidate) => candidate.id === collection.id)
+    if (target === undefined) throw new Error('The target knowledge base was deleted during generation.')
+    if (target.scope === 'workspace' && comparisonKey(target.workspacePath) !== comparisonKey(workspace.path)) {
+      throw new Error('The target knowledge base is no longer available in this workspace.')
+    }
     const now = Date.now()
     const workspacePath = canonicalPath(workspace.path)
     const existing = index.entries.find(
@@ -805,8 +883,7 @@ async function ingestDocument(ctx, store, { workspace, collection, relativePath,
     await store.writeEntryFile(id, fileContent)
     if (existing === undefined) index.entries.unshift(record)
     else index.entries[index.entries.indexOf(existing)] = record
-    const target = index.collections.find((candidate) => candidate.id === collection.id)
-    if (target !== undefined) target.updatedAt = now
+    target.updatedAt = now
     return {
       entry: entryMetadata(index, record),
       replaced: existing !== undefined,
@@ -815,10 +892,10 @@ async function ingestDocument(ctx, store, { workspace, collection, relativePath,
   })
 }
 
-async function searchLibrary(ctx, store, { cwd, query, collectionId, limit }) {
-  const index = await store.readIndex()
-  const accessible = accessibleCollectionIds(index, cwd)
-  let candidates = index.entries.filter((entry) => accessible.has(entry.collectionId))
+async function searchLibrary(store, { cwd, query, collectionId, limit }, snapshot) {
+  const index = snapshot ?? await store.readIndex()
+  const accessible = cwd === undefined ? undefined : accessibleCollectionIds(index, cwd)
+  let candidates = index.entries.filter((entry) => accessible === undefined || accessible.has(entry.collectionId))
   if (collectionId !== undefined) candidates = candidates.filter((entry) => entry.collectionId === collectionId)
   const cappedLimit = Math.max(1, Math.min(50, limit ?? TOOL_LIMIT_DEFAULT))
   const normalized = (query ?? '').trim().toLowerCase()
@@ -830,16 +907,15 @@ async function searchLibrary(ctx, store, { cwd, query, collectionId, limit }) {
         .slice()
         .sort((left, right) => (right.updatedAt ?? 0) - (left.updatedAt ?? 0))
         .slice(0, cappedLimit)
-        .map((entry) => ({ ...entryMetadata(index, entry), score: 0, snippet: entry.summary ?? '' })),
-      index,
+        .map((entry) => ({ ...entryMetadata(index, entry), updatedAt: isoTime(entry.updatedAt), score: 0, snippet: entry.summary ?? '' })),
     }
   }
-  const tokens = normalized.split(/\s+/).filter((token) => token.length > 0)
+  const tokens = searchTokens(normalized)
   const scored = []
   for (const entry of candidates) {
     let body = ''
     try {
-      body = await store.readEntryFile(entry.id)
+      body = parseFrontmatter(await store.readEntryFile(entry.id)).body
     } catch {
       continue
     }
@@ -870,7 +946,6 @@ async function searchLibrary(ctx, store, { cwd, query, collectionId, limit }) {
       score: item.score,
       snippet: item.snippet,
     })),
-    index,
   }
 }
 
@@ -1085,13 +1160,14 @@ async function resolveToolWorkspace(ctx, store, exec) {
     throw new Error('Could not resolve the current workspace directory for knowledge access.')
   }
   const index = await store.readIndex()
-  if (!isWorkspaceGranted(index, cwd)) {
+  const workspace = findSessionWorkspace(ctx, cwd)
+  if (workspace === undefined || !isWorkspaceGranted(index, workspace.path)) {
     throw new Error(
       `Knowledge Center is not enabled for workspace ${cwd}. `
       + 'Ask the user to turn on this workspace in Settings → 知识中心 (Knowledge Center) → 权限与设置, then retry.',
     )
   }
-  return { cwd: canonicalPath(cwd), index }
+  return { cwd: canonicalPath(workspace.path), index }
 }
 
 function knowledgeLanguage(index, requested) {
@@ -1122,6 +1198,7 @@ function createApi(ctx, store) {
       return {
         version: INDEX_VERSION,
         dataDir: store.root,
+        storageRecovery: index.recovery ?? null,
         model: modelLabel(ctx),
         tools: ['knowledge_search', 'knowledge_read', 'knowledge_ingest'],
         settings: index.settings,
@@ -1152,7 +1229,7 @@ function createApi(ctx, store) {
       const index = await store.readIndex()
       const query = typeof data.query === 'string' ? data.query : ''
       // The owner UI searches across every collection, including workspace-scoped ones.
-      return searchLibraryAll(store, index, query, asOptionalString(data.collectionId))
+      return searchLibrary(store, { query, collectionId: asOptionalString(data.collectionId), limit: 30 }, index)
     },
 
     async read(payload) {
@@ -1164,7 +1241,8 @@ function createApi(ctx, store) {
       let file = ''
       try {
         file = await store.readEntryFile(id)
-      } catch {
+      } catch (error) {
+        if (error?.code !== 'ENOENT') throw error
         await store.mutate((current) => {
           current.entries = current.entries.filter((candidate) => candidate.id !== id)
         })
@@ -1175,7 +1253,6 @@ function createApi(ctx, store) {
         meta: entryMetadata(index, entry),
         markdown: parsed.body,
         source: file,
-        headings: extractHeadings(parsed.body),
       }
     },
 
@@ -1203,7 +1280,7 @@ function createApi(ctx, store) {
       return {
         ...result,
         collection: { id: collection.id, name: collection.name, scope: collection.scope },
-        model: modelLabel(ctx),
+        model: result.entry.generator,
       }
     },
 
@@ -1291,7 +1368,7 @@ function createApi(ctx, store) {
           workspace: undefined,
           sources: (Array.isArray(parsed.data.sources) && parsed.data.sources.length > 0
             ? parsed.data.sources.map(String)
-            : entry.sources).map(normalizeSourcePath).filter((value) => value.length > 0),
+            : entry.sources).map((value) => workspaceSourcePath(entry.workspacePath, value)),
           updatedAt: now,
           createdAt: entry.createdAt,
         }
@@ -1333,54 +1410,6 @@ function createApi(ctx, store) {
       })
     },
   }
-}
-
-/** Owner UI search across every collection, regardless of workspace scope. */
-async function searchLibraryAll(store, index, query, collectionId) {
-  const normalized = query.trim().toLowerCase()
-  const tokens = normalized.split(/\s+/).filter((token) => token.length > 0)
-  const scored = []
-  for (const entry of index.entries) {
-    if (collectionId !== undefined && entry.collectionId !== collectionId) continue
-    let body = ''
-    try {
-      body = await store.readEntryFile(entry.id)
-    } catch {
-      continue
-    }
-    const lowerBody = body.toLowerCase()
-    const title = String(entry.title ?? '').toLowerCase()
-    const summary = String(entry.summary ?? '').toLowerCase()
-    let score = 0
-    for (const token of tokens) {
-      if (title.includes(token)) score += 8
-      if (summary.includes(token)) score += 4
-      const occurrences = countOccurrences(lowerBody, token)
-      if (occurrences > 0) score += Math.min(5, occurrences)
-    }
-    if (score > 0) scored.push({ entry, score, snippet: makeSnippet(body, tokens) })
-  }
-  scored.sort((left, right) => right.score - left.score || (right.entry.updatedAt ?? 0) - (left.entry.updatedAt ?? 0))
-  return {
-    query,
-    total: scored.length,
-    results: scored.slice(0, 30).map((item) => ({
-      ...entryMetadata(index, item.entry),
-      updatedAt: isoTime(item.entry.updatedAt),
-      score: item.score,
-      snippet: item.snippet,
-    })),
-  }
-}
-
-function extractHeadings(markdown) {
-  const headings = []
-  const lines = markdown.split(/\r?\n/)
-  for (const line of lines) {
-    const match = /^(#{1,6})\s+(.*)$/.exec(line)
-    if (match !== null) headings.push({ level: match[1].length, text: match[2].trim() })
-  }
-  return headings
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -1428,8 +1457,14 @@ export function apply(ctx) {
     path: CHANNEL,
     handler: async (req, res) => {
       const abort = new AbortController()
-      const onClose = () => abort.abort()
-      req.on('close', onClose)
+      const onRequestClose = () => {
+        if (!req.complete) abort.abort()
+      }
+      const onResponseClose = () => {
+        if (!res.writableEnded) abort.abort()
+      }
+      req.on('close', onRequestClose)
+      res.on('close', onResponseClose)
       try {
         const admission = ctx.connection.admit(req)
         if ('rejection' in admission) {
@@ -1498,7 +1533,8 @@ export function apply(ctx) {
           res.end('bad request')
         }
       } finally {
-        req.off('close', onClose)
+        req.off('close', onRequestClose)
+        res.off('close', onResponseClose)
       }
     },
   }), 'knowledge-center: rpc channel')
@@ -1527,7 +1563,7 @@ export function apply(ctx) {
       const { cwd, index } = await resolveToolWorkspace(ctx, store, exec)
       const query = typeof input.query === 'string' ? input.query : ''
       const limit = typeof input.limit === 'number' ? input.limit : TOOL_LIMIT_DEFAULT
-      const result = await searchLibrary(ctx, store, {
+      const result = await searchLibrary(store, {
         cwd,
         query,
         collectionId: asOptionalString(input.collectionId),

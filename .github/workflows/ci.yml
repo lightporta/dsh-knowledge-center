@@ -23,25 +23,12 @@ jobs:
           node-version: 22
 
       - name: Syntax check
-        shell: bash
-        run: |
-          node --check index.js
-          node --check client.js
-          node --check lib/paths.js
-          node --check lib/text.js
-          node --check lib/extract.js
-          node --check test/paths.test.mjs
-          node --check test/text.test.mjs
-          node --check test/manifest.test.mjs
-          node --check test/client-bundle.test.mjs
-          node --check test/extract.test.mjs
+        run: npm run check
 
-      - name: Validate manifests, locales and icon
+      - name: Validate manifests and locales
         shell: bash
         run: |
           node -e "for (const file of ['package.json', 'locale/en.json', 'locale/zh.json']) { JSON.parse(require('node:fs').readFileSync(file, 'utf8')) } console.log('JSON OK')"
-          node -e "const bytes = require('node:fs').readFileSync('icon.png'); const signature = bytes.subarray(1, 4).toString('latin1'); if (bytes.length > 256 * 1024) throw new Error('icon exceeds 256 KiB'); if (bytes[0] !== 0x89 || signature !== 'PNG') throw new Error('icon.png is not a PNG'); const width = bytes.readUInt32BE(16); const height = bytes.readUInt32BE(20); console.log('PNG OK', width + 'x' + height, bytes.length + ' bytes')"
 
       - name: Run tests
-        shell: bash
-        run: node --test
+        run: npm test

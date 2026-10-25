@@ -13,6 +13,8 @@
 
 ## 中文
 
+本轮可靠性修复与验证：[修复进度](docs/fixes-2026-10-25.md)。Host 更新后需重启 Harness，Client 更新后刷新页面。
+
 ### 简介
 
 `dsh-knowledge-center` 面向一个很具体的问题：工作区里散落着需求、设计、规范、流程等 Markdown/TXT 文档，模型每次都要重新读取、重新理解。知识中心把这些文档**一次性提炼**为结构化的知识 Markdown，集中存放在本机知识库中；可以像 VS Code Markdown 预览一样浏览、检索、编辑、导出；在**被明确授权**的工作区里，模型可以主动调用这些知识。插件提供两个入口：左侧栏的**知识图标**（打开整页面板，Qoder 风格）与 **Settings → 知识中心**（同一功能的设置页）。
@@ -63,6 +65,7 @@
 说明：
 
 - 文本文件上限 1 MiB，二进制文档上限 25 MiB；提取文本上限 40 万字符，随后仍受提炼预算（12k × 6 ≈ 72k 字符）约束。
+- OOXML/PDF 解压预算为单项 16 MiB、累计 64 MiB；OOXML 忽略未使用的媒体资源。PDF 回退遇到冲突字体映射会明确报错，请使用 pdftotext。
 - PDF 只提取**文本层**；扫描件/纯图片 PDF、Word/PPT 中嵌入图片里的文字不在本次范围（需要 OCR）。
 - 旧版 `.doc/.xls/.ppt` 依赖 Harness profile 中启用的 `office-to-pdf`（桌面版默认随包提供）；若该服务不可用会给出明确错误。
 - 不解析图片、音频、视频；Excel 图表、PPT 备注/图片中的文字不保证提取。
@@ -89,7 +92,7 @@ Markdown 预览采用与 VS Code Markdown 预览接近的排版：14px 正文、
 | 项目 | 要求 |
 | --- | --- |
 | DeepSeek Harness | 0.2.1-rc.3 及以上（在 Desktop profile 上验证；Web profile 同样适用） |
-| Node.js | ≥ 20（由 Harness Host 进程提供，插件本身无第三方运行时依赖） |
+| Node.js | ≥ 20.3.0（由 Harness Host 进程提供，插件本身无第三方运行时依赖） |
 | 操作系统 | macOS / Windows / Linux（见「跨平台支持」） |
 | 模型 | 已在 Harness「Settings → 模型」中配置默认模型（提炼时使用 `agentDefaultModel`） |
 
@@ -183,12 +186,12 @@ generator: "provider/model"
 - `docs/release.md`
 ```
 
-知识文件是纯 Markdown，可独立阅读、直接提交到 Git 共享，或交给其他工具处理。front matter **不包含机器绝对路径**：工作区路径只保存在本机 `index.json`，`sources` 使用工作区相对路径（统一为正斜杠；Windows/macOS 上按大小写不敏感去重），因此知识文件可安全地提交或分享。`index.json` 只是索引与权限状态，删除后插件会重建空索引（已生成的 `entries/*.md` 不会被自动重新索引）。
+知识文件是纯 Markdown，可独立阅读、直接提交到 Git 共享，或交给其他工具处理。front matter **不包含机器绝对路径**：工作区路径只保存在本机 `index.json`，`sources` 使用工作区相对路径（统一为正斜杠；Windows/macOS 上按大小写不敏感去重），因此知识文件可安全地提交或分享。`index.json` 保存索引与权限，每次更新前会原子保存上一份有效索引至 `index.json.bak`。主索引缺失或损坏时会尝试恢复备份，并关闭全部工作区授权、显示恢复提示；备份可能早于最近一次操作。无法恢复且已有数据时会报错保留文件，不会静默重置为空库。此备份不包含知识正文，也不替代完整数据目录备份或版本历史。
 
 ### 权限与安全
 
 - **RPC 仅本机 owner**：Settings 页面通过 Harness 浏览器连接调用 `POST /knowledge-center/<method>`；Host 使用 Harness 的连接鉴权（浏览器 Cookie / owner Peer）校验，未认证请求返回 401，非 owner 返回 403。
-- **按工作区授权**：默认全部关闭；模型工具只读取「用户作用域 + 当前工作区作用域」的知识。
+- **按工作区授权**：默认全部关闭；模型工具只读取「用户作用域 + 当前工作区作用域」的知识。会话子目录归属最具体的已注册工作区，单独注册的嵌套工作区需独立授权，不继承父工作区的授权或专属知识库。
 - **数据不离开本机**：知识文件只写入 `$DSH_HOME`，插件不包含任何云同步、遥测或外部上传逻辑；提炼调用的是用户在 Harness 中配置的模型服务。
 - **不要把凭证、个人隐私、未授权共享的内容放进工作区文档或知识库**。知识文件以明文保存。
 - 插件不存储 API Key；模型凭证完全由 Harness 自身管理。
@@ -232,7 +235,7 @@ generator: "provider/model"
 - 提取为尽力而为：PDF 只提取文本层（扫描件需 OCR）；旧版 Office 需要 LibreOffice 服务；复杂版式（分栏、表格合并、图表）只保留文本顺序，不保留视觉布局。
 - 检索为本地关键词 + 摘要匹配，**没有向量嵌入**；适合数百篇规模，不适合大规模语义检索。
 - 提炼质量与速度取决于 Harness 中配置的默认模型；单篇超长文档只提炼前约 72k 字符，会在 front matter 中标记 `truncated: true`。
-- 单进程本地存储，无多人协作 / 云同步 / 版本历史（Git 共享是推荐的外部同步方式）。
+- 本机共享存储使用跨进程锁保护索引读改写，可协调同机多个 profile；不支持多人协作 / 云同步 / 知识正文版本历史。仅对确认退出的本机持锁进程自动回收锁，无法验证时超时并报错。
 - Harness 0.2.1-rc.3 的 Settings 导航图标由内置 shell 硬编码，第三方 Settings 分区统一回退为齿轮；插件改用受支持的侧边栏知识图标作为主入口（见 FAQ）。
 - 尚未包含自动化 UI 视觉回归测试；Windows/Linux 的 UI 端到端验证待补。
 
@@ -247,12 +250,17 @@ dsh-knowledge-center/
 ├── client.js                # Client 半：侧边栏图标 + 整页面板 + Settings 页 + Markdown 渲染器
 ├── cordis.patch.yml         # DSH bundle patch（插入 Host row；Cordis = Harness 插件框架，与 Qoder 无关）
 ├── locale/                  # 插件清单显示标题/描述（en / zh）
-├── icon.png                 # 插件清单图标（DeepSeek Harness 应用图标）
 ├── test/paths.test.mjs      # 跨平台路径单元测试
 ├── test/text.test.mjs       # 分片字符预算单元测试
 ├── test/manifest.test.mjs   # 仓库清单 / 打包 / 许可一致性测试
-├── test/client-bundle.test.mjs # Client bundle 槽位注册与图标渲染测试
-├── test/extract.test.mjs    # 文档提取（OOXML ZIP/XML、HTML、PDF 回退）测试
+├── test/extract.test.mjs    # 文档提取回归测试
+├── test/client-behavior.test.mjs # 异步竞态、草稿保护、搜索与键盘操作
+├── test/host.test.mjs       # RPC、授权、生成及检索
+├── test/lock.test.mjs       # 同进程/跨进程互斥与锁恢复
+├── test/store-recovery.test.mjs # 索引备份与恢复
+├── test/helpers/           # 核心行为测试使用的 React/RPC 环境
+├── scripts/                # 跨平台测试与语法检查入口
+├── docs/VERIFICATION.md    # 验证方法、结果和边界
 ├── .github/workflows/ci.yml # 三平台 CI（语法 + JSON + 单测）
 ├── README.md
 └── LICENSE
@@ -265,7 +273,7 @@ node --check client.js
 node --check lib/paths.js
 node --check lib/text.js
 node --check lib/extract.js
-npm test          # node --test：35 个用例（路径/分片/清单/客户端接线/文档提取）
+npm test          # 全套行为、存储、权限、并发、提取和基础回归测试
 npm run check     # 语法检查合集
 ```
 
@@ -277,18 +285,9 @@ npm run check     # 语法检查合集
 
 ### 测试与验证
 
-测试文件保留在仓库中（CI 依赖、便于复现）；npm 发布包通过 `package.json` 的 `files` 字段不包含 `test/`。
+运行 `npm test` 和 `npm run check`，分别执行核心回归测试及语法检查；CI 对 macOS、Windows、Linux 配置相同命令。发布前可用 `npm pack --dry-run` 核对文件清单。
 
-- **自动化测试**：`npm test`（`node --test`）当前 **35 个用例**
-  - `test/paths.test.mjs`：POSIX / win32 / darwin 路径语义（盘符、UNC 根、大小写、来源路径规范化与去重键）。
-  - `test/text.test.mjs`：提炼分片字符预算（12k × 6 = 72k、截断标记、边界值）。
-  - `test/manifest.test.mjs`：包名/版本/许可、bundle patch、Client loader id、locale 元数据、PNG 图标与 LICENSE 的一致性。
-  - `test/client-bundle.test.mjs`：在 Node 中以伪 React 加载 Client bundle，校验插件形状、locale 注册、`sidebar.panellist` / `main` / `settings.section` 三个槽位与知识图标渲染。
-  - `test/extract.test.mjs`：内存构造 DOCX/XLSX/PPTX ZIP 样本并验证提取；HTML 清洗；PDF 未压缩/Flate 内容流的回退提取。
-- **语法检查**：`npm run check`；CI（`.github/workflows/ci.yml`）在 ubuntu-latest、macos-latest、windows-latest 上运行相同的语法检查与测试。
-- **本地最近一次结果（macOS）**：35/35 测试通过；全部 `node --check` 通过；`npm pack --dry-run` 文件清单正确（index/client/lib/locale/icon/LICENSE/README）。
-- **手动端到端（macOS，0.2.1-rc.3）**：安装与激活、文档提炼（含模型调用）、检索与读取、同一来源更新已有条目、RPC 未认证返回 401、侧边栏与 Settings 槽位注册；另外用真实生成的 DOCX/PDF 文档完成了一次完整摄取验证（Word 正文、表格、PDF 文本均成功提炼为知识 MD）。
-- **待补**：Windows/Linux 真机 UI 端到端验证；自动化 UI 视觉回归；扫描件 OCR。
+测试方法、结果、已归档项目与尚未验证的范围统一记录在 [验证记录](docs/VERIFICATION.md)。测试代码保留在开发仓库，不进入插件发布包。
 
 ### 常见问题（FAQ）
 
@@ -299,10 +298,7 @@ npm run check     # 语法检查合集
 Harness 0.2.1-rc.3 的 Settings 导航图标由内置 shell 按 section id 硬编码（`account`/`models`/`plugins`/`agent-presets`/`archived-sessions`），第三方 Settings 分区没有自定义 icon API，统一回退为齿轮。因此插件把定制的知识图标放在官方支持的**侧边栏面板入口**上；若未来 Harness 暴露 Settings section icon 字段，会切换过去。
 
 **问：为什么仓库里保留 `test/`？**
-CI 与可复现性需要；测试成本低（35 个用例、无第三方依赖）。如果只想使用发布包，`npm pack`/安装不受影响，发布包不包含 `test/`。
-
-**问：插件清单里的图标是什么？为什么不用书本/Qoder 风格图标？**
-插件清单图标使用 **DeepSeek Harness 发行包中的官方应用图标**（鲸鱼图标），用于标识该插件运行于 DeepSeek Harness 平台；仓库不含 Qoder 的任何图标或素材（Qoder 仅作为交互设计参考）。左侧栏与页面标题使用本项目自绘的「书本 + 知识星点」知识图标。DeepSeek / DeepSeek Harness 商标归其所有者，本插件是独立的社区项目，与官方无隶属关系。
+CI 与可复现性需要；测试无第三方依赖。如果只想使用发布包，`npm pack`/安装不受影响，发布包不包含 `test/`。
 
 **问：知识文件里会不会包含我的绝对路径？**
 不会。front matter 不含 workspace 绝对路径，`sources` 是工作区相对路径；绝对路径只保存在本机 `index.json`。
@@ -312,7 +308,6 @@ CI 与可复现性需要；测试成本低（35 个用例、无第三方依赖�
 
 ### 致谢与参考
 
-- 插件清单图标：DeepSeek Harness 发行包中的官方应用图标（MIT 许可分发，商标归其所有者；本插件为独立社区项目，与官方无隶属关系）。左侧栏与页面标题的知识图标为本项目自绘。
 - 交互灵感：[Qoder Knowledge Base](https://docs.qoder.com/qoder/knowledge-base.md)、[Qoder Repo Wiki](https://docs.qoder.com/qoder/repo-wiki.md)、[Knowledge Card](https://docs.qoder.com/user-guide/knowledge-engine/knowledge-cards.md)。
 - 同类开源思路：[llm-wiki](https://github.com/owenliang/llm-wiki)（Qoder Skill 形式的文档→知识 wiki，许可未声明，仅设计参考）、[deepwiki-open](https://github.com/AsyncFuncAI/deepwiki-open)（MIT）、[basic-memory](https://github.com/basicmachines-co/basic-memory)（AGPL-3.0）。
 - 本仓库代码为独立实现，MIT 许可。
@@ -324,6 +319,8 @@ CI 与可复现性需要；测试成本低（35 个用例、无第三方依赖�
 ---
 
 ## English
+
+Reliability changes and verification: [repair log](docs/fixes-2026-10-25.md). Restart Harness after Host changes and refresh the page after Client changes.
 
 ### Overview
 
@@ -375,6 +372,7 @@ The interaction model is inspired by Qoder CN's knowledge features:
 Notes:
 
 - Text documents are capped at 1 MiB and binary documents at 25 MiB; extracted text is capped at 400k characters and then bounded by the distillation budget (12k × 6 ≈ 72k characters).
+- OOXML/PDF decompression is capped at 16 MiB per entry/stream and 64 MiB in total. Unused OOXML media is skipped. Conflicting font mappings in the PDF fallback produce a clear error; use pdftotext for those files.
 - PDF extraction reads the **text layer** only; scanned/image-only PDFs and text inside embedded images (Word/PPT) need OCR and are out of scope.
 - Legacy `.doc/.xls/.ppt` require the `office-to-pdf` service enabled in the Harness profile (shipped with Desktop); a clear error is returned when it is unavailable.
 - Images, audio and video are not parsed; Excel charts and text inside PPT notes/images are not guaranteed to be extracted.
@@ -401,7 +399,7 @@ The preview closely follows VS Code's Markdown preview: 14px body text, underlin
 | Item | Requirement |
 | --- | --- |
 | DeepSeek Harness | 0.2.1-rc.3 or newer (verified on a Desktop profile; the Web profile works the same way) |
-| Node.js | ≥ 20, provided by the Harness Host process (the plugin has no third-party runtime dependencies) |
+| Node.js | ≥ 20.3.0, provided by the Harness Host process (the plugin has no third-party runtime dependencies) |
 | OS | macOS / Windows / Linux (see "Cross-platform") |
 | Model | A default model configured in Harness "Settings → Models" (`agentDefaultModel` is used for distillation) |
 
@@ -495,12 +493,12 @@ generator: "provider/model"
 - `docs/release.md`
 ```
 
-Knowledge files are plain Markdown: readable on their own, committable to Git, or consumable by other tools. The front matter **contains no machine-absolute paths**: the workspace path stays in the local `index.json`, while `sources` holds workspace-relative paths with forward slashes (deduplicated case-insensitively on Windows/macOS). Notes are therefore safe to commit or share. `index.json` is only an index and permission store; deleting it rebuilds an empty index (existing `entries/*.md` are not re-indexed automatically).
+Knowledge files are plain Markdown: readable on their own, committable to Git, or consumable by other tools. The front matter **contains no machine-absolute paths**: the workspace path stays in the local `index.json`, while `sources` holds workspace-relative paths with forward slashes (deduplicated case-insensitively on Windows/macOS). Notes are therefore safe to commit or share. `index.json` stores the index and permissions; each update atomically preserves the previous valid index as `index.json.bak`. A missing or damaged primary can recover from that backup, disabling all workspace grants and showing a recovery notice. The backup may predate recent operations. Unrecoverable existing data is preserved with an error instead of silently resetting the library. This index backup does not include note bodies and does not replace a full-directory backup or revision history.
 
 ### Permissions and security
 
 - **Owner-only RPC**: the Settings page calls `POST /knowledge-center/<method>` over the Harness browser connection; the Host validates it with Harness connection authentication (browser Cookie / owner Peer). Unauthenticated requests get 401, non-owner requests 403.
-- **Per-workspace grants**: denied by default; model tools only read knowledge in the user scope plus the current workspace scope.
+- **Per-workspace grants**: denied by default; model tools only read knowledge in the user scope plus the current workspace scope. Sessions in subdirectories belong to the most specific registered workspace. Separately registered nested workspaces require independent grants and do not inherit parent workspace libraries.
 - **Data stays local**: knowledge files are written only under `$DSH_HOME`; the plugin contains no cloud sync, telemetry or external upload logic. Distillation uses the model service configured in Harness.
 - **Never ingest credentials, personal data or content you are not allowed to share.** Knowledge files are stored in plaintext.
 - The plugin stores no API keys; model credentials remain owned by Harness.
@@ -544,7 +542,7 @@ All platform-sensitive logic is centralized in `lib/paths.js` (`canonicalPath`, 
 - Extraction is best-effort: PDF reads the text layer only (scanned documents need OCR); legacy Office requires the LibreOffice service; complex layouts keep text order but not visual structure.
 - Retrieval is local keyword/summary matching with **no vector embeddings**; suitable for hundreds of notes, not for large-scale semantic search.
 - Distillation quality and speed depend on the configured default model; very long documents are distilled from roughly the first 72k characters and marked `truncated: true` in the front matter.
-- Single-process local storage with no team collaboration, cloud sync or version history (Git is the recommended external sync mechanism).
+- Local shared storage uses a cross-process lock for index updates across profiles on the same machine. No team collaboration, cloud sync or note-body revision history. Lock recovery requires a confirmed exited local owner; an unverifiable owner causes a timeout instead of stealing the lock.
 - Harness 0.2.1-rc.3 hardcodes Settings nav icons; third-party Settings sections fall back to a gear, so the plugin uses the supported sidebar knowledge icon as its primary entry (see FAQ).
 - No automated UI visual regression tests yet; Windows/Linux UI end-to-end verification is pending.
 
@@ -559,12 +557,17 @@ dsh-knowledge-center/
 ├── client.js                # Client half: sidebar icon + full-page panel + Settings page + Markdown renderer
 ├── cordis.patch.yml         # DSH bundle patch (inserts the Host row; Cordis is Harness's plugin framework, unrelated to Qoder)
 ├── locale/                  # plugin inventory title/description (en / zh)
-├── icon.png                 # plugin inventory icon (DeepSeek Harness application icon)
 ├── test/paths.test.mjs      # cross-platform path unit tests
 ├── test/text.test.mjs       # chunk character-budget unit tests
 ├── test/manifest.test.mjs   # manifest / packaging / license consistency tests
-├── test/client-bundle.test.mjs # client bundle slot registration and icon rendering tests
-├── test/extract.test.mjs    # document extraction tests (OOXML ZIP/XML, HTML, PDF fallback)
+├── test/extract.test.mjs    # document extraction regressions
+├── test/client-behavior.test.mjs # request ordering, drafts, search and keyboard behavior
+├── test/host.test.mjs       # RPC, permissions, generation and retrieval
+├── test/lock.test.mjs       # process coordination and lock recovery
+├── test/store-recovery.test.mjs # index backup and recovery
+├── test/helpers/           # React/RPC environment for core behavioral tests
+├── scripts/                # cross-platform test and syntax-check entry points
+├── docs/VERIFICATION.md    # verification methods, results and limits
 ├── .github/workflows/ci.yml # three-platform CI (syntax + JSON + tests)
 ├── README.md
 └── LICENSE
@@ -577,7 +580,7 @@ node --check client.js
 node --check lib/paths.js
 node --check lib/text.js
 node --check lib/extract.js
-npm test          # node --test: 35 cases (paths / chunk budget / manifest / client wiring / extraction)
+npm test          # behavior, storage, permissions, concurrency, extraction and baseline regressions
 npm run check     # aggregated syntax checks
 ```
 
@@ -589,18 +592,9 @@ Development notes:
 
 ### Testing and verification
 
-Test files are committed (CI depends on them and they make results reproducible); the npm package excludes `test/` through the `files` field.
+Run `npm test` for core regressions and `npm run check` for syntax checks. CI is configured to run the same commands on macOS, Windows and Linux. Use `npm pack --dry-run` to inspect the release inventory.
 
-- **Automated tests**: `npm test` (`node --test`), currently **35 cases**
-  - `test/paths.test.mjs`: POSIX / win32 / darwin path semantics (drive/UNC roots, case rules, source-path normalization and dedup keys).
-  - `test/text.test.mjs`: distillation chunk budget (12k × 6 = 72k, truncation flag, boundaries).
-  - `test/manifest.test.mjs`: package name/version/license, bundle patch, client loader id, locale metadata, PNG icon and LICENSE consistency.
-  - `test/client-bundle.test.mjs`: loads the Client bundle in Node with a fake React module and verifies the plugin shape, locale registration, the `sidebar.panellist` / `main` / `settings.section` slots and the knowledge glyph rendering.
-  - `test/extract.test.mjs`: builds DOCX/XLSX/PPTX ZIP fixtures in memory, verifies HTML sanitizing, and tests PDF fallback extraction for uncompressed and Flate-compressed content streams.
-- **Syntax checks**: `npm run check`; CI (`.github/workflows/ci.yml`) runs the same checks and tests on ubuntu-latest, macos-latest and windows-latest.
-- **Latest local result (macOS)**: 35/35 tests pass; every `node --check` passes; `npm pack --dry-run` lists the expected files (index/client/lib/locale/icon/LICENSE/README).
-- **Manual end-to-end (macOS, 0.2.1-rc.3)**: install and activation, document distillation (real model call), search and read, update-on-reingest, unauthenticated RPC returns 401, sidebar and Settings slot registration. A real generated DOCX and PDF were also ingested end-to-end (Word paragraphs/table text and PDF text were distilled into knowledge Markdown).
-- **Pending**: real Windows/Linux UI end-to-end verification; automated UI visual regression; scanned-document OCR.
+Methods, results, archived checks and verification limits are recorded in the [verification log](docs/VERIFICATION.md). Tests remain in the development repository and are excluded from the plugin package.
 
 ### FAQ
 
@@ -611,10 +605,7 @@ No. Cordis (`@deepseek-ai/cordis`) is DeepSeek Harness's plugin framework; `cord
 Harness 0.2.1-rc.3 hardcodes Settings nav icons by section id (`account`/`models`/`plugins`/`agent-presets`/`archived-sessions`); third-party Settings sections have no icon API and fall back to a gear. The plugin therefore places its custom knowledge icon on the officially supported **sidebar panel entry**; if a future Harness exposes a Settings section icon field, we will switch.
 
 **Q: Why are the tests committed?**
-CI and reproducibility; the suite is cheap (35 cases, no third-party dependencies). If you only consume the published package, `npm pack`/installation is unaffected because the package excludes `test/`.
-
-**Q: What is the plugin inventory icon, and why not a book/Qoder-style icon?**
-The plugin inventory icon is the **official DeepSeek Harness application icon** (the whale) from the Harness distribution, identifying that this plugin targets DeepSeek Harness. The repository contains no Qoder icons or artwork (Qoder is only an interaction-design reference). The sidebar entry and page heading use our own "book + knowledge spark" glyph. DeepSeek and DeepSeek Harness are trademarks of their respective owners; this is an independent community project with no official affiliation.
+CI and reproducibility; the suite has no third-party dependencies. If you only consume the published package, `npm pack`/installation is unaffected because the package excludes `test/`.
 
 **Q: Do knowledge files contain my absolute paths?**
 No. The front matter has no absolute workspace path; `sources` are workspace-relative. Absolute paths stay in the local `index.json`.
@@ -624,7 +615,6 @@ Yes. Data lives in the user-level `$DSH_HOME/knowledge-center`, shared by every 
 
 ### Acknowledgements
 
-- Plugin inventory icon: the official DeepSeek Harness application icon from the Harness distribution (distributed under the MIT license; trademarks belong to their owners; this plugin is an independent community project with no official affiliation). The sidebar/page-heading knowledge glyph is drawn by this project.
 - Interaction inspiration: [Qoder Knowledge Base](https://docs.qoder.com/qoder/knowledge-base.md), [Qoder Repo Wiki](https://docs.qoder.com/qoder/repo-wiki.md), [Knowledge Card](https://docs.qoder.com/user-guide/knowledge-engine/knowledge-cards.md).
 - Related open-source ideas: [llm-wiki](https://github.com/owenliang/llm-wiki) (a Qoder Skill that distills documents into a wiki; no declared license, design reference only), [deepwiki-open](https://github.com/AsyncFuncAI/deepwiki-open) (MIT), [basic-memory](https://github.com/basicmachines-co/basic-memory) (AGPL-3.0).
 - This repository is an independent implementation under the MIT license.

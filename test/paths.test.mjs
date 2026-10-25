@@ -7,6 +7,7 @@
  * Run with: node --test
  */
 import test from 'node:test'
+import { workspaceSourcePath } from '../lib/paths.js'
 import assert from 'node:assert/strict'
 import {
   canonicalPath,
@@ -88,4 +89,13 @@ test('source identity follows platform case rules', () => {
   assert.notEqual(sourceKey('docs/A.md', 'linux'), sourceKey('docs/a.md', 'linux'))
   assert.equal(sourceKey('docs/A.md', 'darwin'), sourceKey('docs/a.md', 'darwin'))
   assert.equal(sourceKey('', 'linux'), '')
+})
+test('workspace source identities normalize dot segments and reject absolute/escaping paths', () => {
+  for (const [platform, root] of [['linux', '/repo'], ['darwin', '/repo'], ['win32', 'C:\\repo']]) {
+    assert.equal(workspaceSourcePath(root, './docs/../source.md', platform), 'source.md')
+    assert.equal(workspaceSourcePath(root, 'docs\\nested\\..\\source.md', platform), 'docs/source.md')
+    for (const path of ['/repo/source.md', 'C:\\repo\\source.md', '../source.md', '.', 'C:source.md', '\\\\server\\share\\source.md']) {
+      assert.throws(() => workspaceSourcePath(root, path, platform), /Source/)
+    }
+  }
 })

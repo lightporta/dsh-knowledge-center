@@ -7,6 +7,7 @@ window.__ModuleLoader__.load({
 
     const NS = 'knowledge-center'
     const CHANNEL = '/knowledge-center'
+    let sectionSequence = 0
 
     // ──────────────────────────────────────────────────────────────────────
     // Locale dictionaries (the Host half carries its own inventory metadata)
@@ -19,7 +20,9 @@ window.__ModuleLoader__.load({
       tabLibrary: '知识库',
       tabGenerate: '生成知识',
       tabAccess: '权限与设置',
-      searchPlaceholder: '搜索标题、摘要或来源…',
+      searchPlaceholder: '搜索标题、摘要、来源或正文…',
+      searching: '正在检索知识…',
+      searchResultCount: '找到 {total} 条匹配，显示 {count} 条。',
       allCollections: '全部知识库',
       newLibrary: '新建知识库',
       refresh: '刷新',
@@ -96,6 +99,14 @@ window.__ModuleLoader__.load({
       libraryCreated: '知识库已创建',
       entryDeleted: '知识已删除',
       entrySaved: '知识已保存',
+      settingSaved: '设置已保存',
+      unsavedChanges: '这条知识有未保存的修改。',
+      draftPreview: '未保存的草稿预览',
+      saveAndBack: '保存并返回',
+      discardChanges: '放弃修改',
+      keepEditing: '继续编辑',
+      scanWorkspaceChanged: '工作区或扫描结果已改变，请重新扫描后再生成。',
+      storageRecovered: '知识索引已从备份恢复，备份可能早于最近操作，知识库内容可能回退。所有工作区的模型调用授权已关闭，请到「权限与设置」重新授权。',
       collectionDeleted: '知识库已删除',
       permissionDeniedHint: '模型工具在未授权的工作区会被拒绝。',
     }
@@ -107,7 +118,9 @@ window.__ModuleLoader__.load({
       tabLibrary: 'Knowledge Base',
       tabGenerate: 'Generate',
       tabAccess: 'Access & Settings',
-      searchPlaceholder: 'Search titles, summaries, or sources…',
+      searchPlaceholder: 'Search titles, summaries, sources, or content…',
+      searching: 'Searching knowledge…',
+      searchResultCount: '{total} matches, showing {count}.',
       allCollections: 'All knowledge bases',
       newLibrary: 'New knowledge base',
       refresh: 'Refresh',
@@ -184,6 +197,14 @@ window.__ModuleLoader__.load({
       libraryCreated: 'Knowledge base created',
       entryDeleted: 'Note deleted',
       entrySaved: 'Note saved',
+      settingSaved: 'Settings saved',
+      unsavedChanges: 'This note has unsaved changes.',
+      draftPreview: 'Preview of the unsaved draft',
+      saveAndBack: 'Save and return',
+      discardChanges: 'Discard changes',
+      keepEditing: 'Keep editing',
+      scanWorkspaceChanged: 'The workspace or scan has changed. Scan again before generating.',
+      storageRecovered: 'The knowledge index was restored from a backup. The backup may predate recent changes, so library contents may have reverted. Model access has been disabled for all workspaces. Re-enable the workspaces you trust in Access & Settings.',
       collectionDeleted: 'Knowledge base deleted',
       permissionDeniedHint: 'Model tools are refused in workspaces without a grant.',
     }
@@ -220,7 +241,8 @@ window.__ModuleLoader__.load({
     }
 
     function formatDate(value) {
-      const time = typeof value === 'number' ? value : Number(value)
+      const numeric = Number(value)
+      const time = Number.isFinite(numeric) ? numeric : Date.parse(String(value))
       if (!Number.isFinite(time) || time <= 0) return '-'
       try {
         return new Date(time).toLocaleString()
@@ -498,7 +520,7 @@ window.__ModuleLoader__.load({
 .kc-tab{appearance:none;border:0;background:transparent;color:var(--dsw-alias-label-secondary);font-size:13px;line-height:20px;padding:5px 12px;border-radius:6px;cursor:pointer;font-family:inherit}
 .kc-tab:hover{background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-primary)}
 .kc-tab-active{background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-primary);font-weight:500}
-.kc-tab:focus-visible,.kc-btn:focus-visible,.kc-input:focus-visible,.kc-switch:focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:1px}
+.kc-tab:focus-visible,.kc-btn:focus-visible,.kc-input:focus-visible,.kc-switch:focus-visible,.kc-entry:focus-visible,.kc-segmented button:focus-visible,.kc-editor:focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:1px}
 .kc-panes{flex:1;min-height:0;display:flex;flex-direction:column}
 .kc-pane{display:flex;flex-direction:column;gap:10px;flex:1;min-height:0;overflow:hidden}
 .kc-toolbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;flex:none}
@@ -616,41 +638,34 @@ window.__ModuleLoader__.load({
     // Shared data hooks + small components
     // ──────────────────────────────────────────────────────────────────────
 
-    function useLibrary(ctx, revision) {
+    function useLibrary(ctx) {
       const [data, setData] = useState(null)
       const [loading, setLoading] = useState(true)
       const [error, setError] = useState(null)
+      const requestRef = useRef(null)
       const load = useCallback(async () => {
+        requestRef.current?.abort()
+        const controller = new AbortController()
+        requestRef.current = controller
         setLoading(true)
         setError(null)
         try {
-          const value = await callRpc(ctx, 'state')
-          setData(value)
+          const value = await callRpc(ctx, 'state', {}, controller.signal)
+          if (requestRef.current === controller) setData(value)
         } catch (failure) {
-          setError(errorMessage(failure))
+          if (requestRef.current === controller) setError(errorMessage(failure))
         } finally {
-          setLoading(false)
+          if (requestRef.current === controller) setLoading(false)
         }
       }, [ctx])
       useEffect(() => {
-        let cancelled = false
-        setLoading(true)
-        setError(null)
-        callRpc(ctx, 'state')
-          .then((value) => {
-            if (!cancelled) setData(value)
-          })
-          .catch((failure) => {
-            if (!cancelled) setError(errorMessage(failure))
-          })
-          .finally(() => {
-            if (!cancelled) setLoading(false)
-          })
+        void load()
         return () => {
-          cancelled = true
+          requestRef.current?.abort()
+          requestRef.current = null
         }
-      }, [ctx, revision, load])
-      return { data, loading, error, reload: load, setData }
+      }, [load])
+      return { data, loading, error, reload: load }
     }
 
     function Spinner() {
@@ -660,7 +675,7 @@ window.__ModuleLoader__.load({
     function ErrorBanner({ message, onRetry, t }) {
       if (message === null || message === undefined) return null
       return h('div', { className: 'kc-card' },
-        h('div', { className: 'kc-error' }, `${tr(t, 'errorPrefix')}${message}`),
+        h('div', { className: 'kc-error', role: 'alert' }, `${tr(t, 'errorPrefix')}${message}`),
         onRetry === undefined ? null : h('div', null, h('button', { type: 'button', className: 'kc-btn kc-btn-small', onClick: onRetry }, tr(t, 'retry'))))
     }
 
@@ -670,17 +685,24 @@ window.__ModuleLoader__.load({
 
     function Notice({ kind, text }) {
       if (text === null || text === undefined || text === '') return null
-      return h('div', { className: kind === 'error' ? 'kc-error' : kind === 'warn' ? 'kc-warn' : 'kc-ok' }, text)
+      return h('div', {
+        className: kind === 'error' ? 'kc-error' : kind === 'warn' ? 'kc-warn' : 'kc-ok',
+        role: kind === 'error' || kind === 'warn' ? 'alert' : 'status',
+      }, text)
     }
 
     // ──────────────────────────────────────────────────────────────────────
     // Library tab
     // ──────────────────────────────────────────────────────────────────────
 
-    function LibraryTab({ ctx, t, revision, notifyChanged }) {
-      const { data, loading, error, reload } = useLibrary(ctx, revision)
+    function LibraryTab({ ctx, t, library }) {
+      const { data, loading, error, reload } = library
       const [collectionFilter, setCollectionFilter] = useState('all')
       const [query, setQuery] = useState('')
+      const [searchResult, setSearchResult] = useState(null)
+      const [searchLoading, setSearchLoading] = useState(false)
+      const [searchError, setSearchError] = useState(null)
+      const searchRequestRef = useRef(null)
       const [detailId, setDetailId] = useState(null)
       const [detail, setDetail] = useState(null)
       const [detailError, setDetailError] = useState(null)
@@ -697,8 +719,20 @@ window.__ModuleLoader__.load({
       const [newScope, setNewScope] = useState('user')
       const [newWorkspace, setNewWorkspace] = useState('')
       const [createError, setCreateError] = useState(null)
+      const [pendingExit, setPendingExit] = useState(null)
+      const detailRequestRef = useRef(null)
+      const detailMutationRef = useRef(false)
+
+      useEffect(() => () => {
+        detailRequestRef.current?.controller.abort()
+        detailRequestRef.current = null
+      }, [])
 
       const openEntry = useCallback(async (id) => {
+        if (detailMutationRef.current) return
+        detailRequestRef.current?.controller.abort()
+        const request = { id, controller: new AbortController() }
+        detailRequestRef.current = request
         setDetailId(id)
         setDetailLoading(true)
         setDetailError(null)
@@ -706,37 +740,109 @@ window.__ModuleLoader__.load({
         setEditing(false)
         setViewMode('rendered')
         setNotice(null)
+        setErrorNotice(null)
+        setPendingDelete(null)
+        setPendingExit(null)
+        setDraft('')
         try {
-          const value = await callRpc(ctx, 'read', { id })
+          const value = await callRpc(ctx, 'read', { id }, request.controller.signal)
+          if (detailRequestRef.current !== request) return
+          if (value?.meta?.id !== id) throw new Error('Knowledge note response does not match the requested id.')
           setDetail(value)
           setDraft(value.source)
         } catch (failure) {
-          setDetailError(errorMessage(failure))
+          if (detailRequestRef.current === request) setDetailError(errorMessage(failure))
         } finally {
-          setDetailLoading(false)
+          if (detailRequestRef.current === request) setDetailLoading(false)
         }
       }, [ctx])
 
       const closeDetail = useCallback(() => {
+        if (detailMutationRef.current) return
+        detailRequestRef.current?.controller.abort()
+        detailRequestRef.current = null
         setDetailId(null)
         setDetail(null)
+        setDetailLoading(false)
         setDetailError(null)
         setEditing(false)
+        setDraft('')
+        setPendingDelete(null)
+        setPendingExit(null)
         setNotice(null)
+        setErrorNotice(null)
       }, [])
+
+      const detailRequest = detailRequestRef.current
+      const isCurrentDetail = () => detail !== null && !detailLoading && !busy
+        && !detailMutationRef.current && detail.meta.id === detailId
+        && detailRequestRef.current === detailRequest && detailRequest?.id === detailId
+      const detailReady = isCurrentDetail()
+      const dirtyDraft = editing && detail !== null && draft !== detail.source
+
+      const finishEditing = () => {
+        setEditing(false)
+        setDraft(detail === null ? '' : detail.source)
+        setPendingExit(null)
+      }
+
+      const requestExit = (action) => {
+        if (busy || detailMutationRef.current) return
+        if (dirtyDraft) {
+          setPendingExit(action)
+          return
+        }
+        if (action === 'close') closeDetail()
+        else finishEditing()
+      }
+
+      const queryText = query.trim()
+      useEffect(() => {
+        if (queryText === '' || data === null) {
+          setSearchResult(null)
+          setSearchLoading(false)
+          setSearchError(null)
+          return undefined
+        }
+        const request = { query: queryText, collectionId: collectionFilter, controller: new AbortController() }
+        searchRequestRef.current = request
+        setSearchResult(null)
+        setSearchLoading(true)
+        setSearchError(null)
+        const timer = setTimeout(() => {
+          callRpc(ctx, 'search', {
+            query: request.query,
+            ...(request.collectionId === 'all' ? {} : { collectionId: request.collectionId }),
+          }, request.controller.signal)
+            .then((value) => {
+              if (searchRequestRef.current === request) {
+                setSearchResult({ ...value, query: request.query, collectionId: request.collectionId })
+              }
+            })
+            .catch((failure) => {
+              if (searchRequestRef.current === request) setSearchError(errorMessage(failure))
+            })
+            .finally(() => {
+              if (searchRequestRef.current === request) setSearchLoading(false)
+            })
+        }, 200)
+        return () => {
+          clearTimeout(timer)
+          request.controller.abort()
+          if (searchRequestRef.current === request) searchRequestRef.current = null
+        }
+      }, [ctx, queryText, collectionFilter, data])
 
       const entries = useMemo(() => {
         if (data === null) return []
-        const filterText = query.trim().toLowerCase()
+        if (queryText !== '') {
+          return searchResult?.query === queryText && searchResult.collectionId === collectionFilter
+            ? searchResult.results : []
+        }
         return data.entries.filter((entry) => {
-          if (collectionFilter !== 'all' && entry.collectionId !== collectionFilter) return false
-          if (filterText.length === 0) return true
-          const haystack = [entry.title, entry.summary, (entry.sources ?? []).join(' '), entry.collectionName]
-            .join(' ')
-            .toLowerCase()
-          return haystack.includes(filterText)
+          return collectionFilter === 'all' || entry.collectionId === collectionFilter
         })
-      }, [data, query, collectionFilter])
+      }, [data, queryText, collectionFilter, searchResult])
 
       const collections = data === null ? [] : data.collections
       const workspaces = data === null ? [] : data.workspaces
@@ -761,7 +867,6 @@ window.__ModuleLoader__.load({
           setNewWorkspace('')
           setNotice(tr(t, 'libraryCreated'))
           await reload()
-          notifyChanged()
         } catch (failure) {
           setCreateError(errorMessage(failure))
         } finally {
@@ -770,18 +875,21 @@ window.__ModuleLoader__.load({
       }
 
       const deleteEntry = async (id) => {
+        if (!isCurrentDetail() || id !== detail.meta.id) return
+        detailMutationRef.current = true
         setBusy(true)
         setNotice(null)
         try {
           await callRpc(ctx, 'deleteEntry', { id })
           setPendingDelete(null)
           setNotice(tr(t, 'entryDeleted'))
+          detailMutationRef.current = false
           closeDetail()
           await reload()
-          notifyChanged()
         } catch (failure) {
           setDetailError(errorMessage(failure))
         } finally {
+          detailMutationRef.current = false
           setBusy(false)
         }
       }
@@ -795,7 +903,6 @@ window.__ModuleLoader__.load({
           setPendingDelete(null)
           setNotice(tr(t, 'collectionDeleted'))
           await reload()
-          notifyChanged()
         } catch (failure) {
           setErrorNotice(`${tr(t, 'errorPrefix')}${errorMessage(failure)}`)
         } finally {
@@ -804,28 +911,37 @@ window.__ModuleLoader__.load({
       }
 
       const saveEntry = async () => {
-        if (detail === null) return
+        if (!isCurrentDetail()) return false
+        detailMutationRef.current = true
         setBusy(true)
         setNotice(null)
+        setDetailError(null)
         try {
           const value = await callRpc(ctx, 'saveEntry', { id: detail.meta.id, markdown: draft })
+          if (value.entry.id !== detailId) throw new Error('Saved knowledge note does not match the requested id.')
           const next = await callRpc(ctx, 'read', { id: value.entry.id })
+          if (detailRequestRef.current !== detailRequest) return
+          if (next?.meta?.id !== detailId) throw new Error('Knowledge note response does not match the requested id.')
           setDetail(next)
           setDraft(next.source)
           setEditing(false)
+          setPendingExit(null)
           setNotice(tr(t, 'entrySaved'))
           await reload()
+          return true
         } catch (failure) {
-          setDetailError(errorMessage(failure))
+          if (detailRequestRef.current === detailRequest) setDetailError(errorMessage(failure))
+          return false
         } finally {
+          detailMutationRef.current = false
           setBusy(false)
         }
       }
 
       const copyCurrent = async () => {
-        if (detail === null) return
+        if (!isCurrentDetail()) return
         try {
-          await copyText(detail.source)
+          await copyText(editing ? draft : detail.source)
           setErrorNotice(null)
           setNotice(tr(t, 'copied'))
         } catch (failure) {
@@ -834,9 +950,9 @@ window.__ModuleLoader__.load({
       }
 
       const downloadCurrent = () => {
-        if (detail === null) return
+        if (!isCurrentDetail()) return
         const title = String(detail.meta.title ?? 'knowledge').replace(/[\\/:*?"<>|]+/g, '_').slice(0, 80)
-        downloadText(`${title}.md`, detail.source)
+        downloadText(`${title}.md`, editing ? draft : detail.source)
       }
 
       const renderCollectionChip = (collection) => {
@@ -860,24 +976,39 @@ window.__ModuleLoader__.load({
       if (detailId !== null) {
         return h('div', { className: 'kc-pane' },
           h('div', { className: 'kc-detail-head' },
-            h('button', { type: 'button', className: 'kc-btn', onClick: closeDetail }, `← ${tr(t, 'back')}`),
+            h('button', { type: 'button', className: 'kc-btn', disabled: busy, onClick: () => requestExit('close') }, `← ${tr(t, 'back')}`),
             h('div', { className: 'kc-detail-actions' },
               h('div', { className: 'kc-segmented' },
-                h('button', { type: 'button', 'data-active': viewMode === 'rendered', onClick: () => { setViewMode('rendered'); setEditing(false) } }, tr(t, 'rendered')),
-                h('button', { type: 'button', 'data-active': viewMode === 'source', onClick: () => { setViewMode('source'); setEditing(false) } }, tr(t, 'sourceMode'))),
-              h('button', { type: 'button', className: 'kc-btn kc-btn-small', onClick: copyCurrent }, tr(t, 'copy')),
-              h('button', { type: 'button', className: 'kc-btn kc-btn-small', onClick: downloadCurrent }, tr(t, 'download')),
+                h('button', { type: 'button', disabled: !detailReady, 'data-active': viewMode === 'rendered', onClick: () => setViewMode('rendered') }, tr(t, 'rendered')),
+                h('button', { type: 'button', disabled: !detailReady, 'data-active': viewMode === 'source', onClick: () => setViewMode('source') }, tr(t, 'sourceMode'))),
+              h('button', { type: 'button', className: 'kc-btn kc-btn-small', disabled: !detailReady, onClick: copyCurrent }, tr(t, 'copy')),
+              h('button', { type: 'button', className: 'kc-btn kc-btn-small', disabled: !detailReady, onClick: downloadCurrent }, tr(t, 'download')),
               editing
                 ? h('button', { type: 'button', className: 'kc-btn kc-btn-small kc-btn-primary', disabled: busy, onClick: saveEntry }, tr(t, 'save'))
-                : h('button', { type: 'button', className: 'kc-btn kc-btn-small', onClick: () => { setEditing(true); setViewMode('source'); setDraft(detail === null ? '' : detail.source) } }, tr(t, 'edit')),
+                : h('button', { type: 'button', className: 'kc-btn kc-btn-small', disabled: !detailReady, onClick: () => { if (!isCurrentDetail()) return; setEditing(true); setViewMode('source'); setDraft(detail.source) } }, tr(t, 'edit')),
               pendingDelete === detailId
                 ? h('span', { className: 'kc-row' },
                     h('span', { className: 'kc-warn' }, tr(t, 'deleteEntryTitle')),
-                    h('button', { type: 'button', className: 'kc-btn kc-btn-small kc-btn-danger', disabled: busy, onClick: () => deleteEntry(detailId) }, tr(t, 'confirmDelete')),
+                    h('button', { type: 'button', className: 'kc-btn kc-btn-small kc-btn-danger', disabled: !detailReady, onClick: () => deleteEntry(detail.meta.id) }, tr(t, 'confirmDelete')),
                     h('button', { type: 'button', className: 'kc-btn kc-btn-small', onClick: () => setPendingDelete(null) }, tr(t, 'cancel')))
-                : h('button', { type: 'button', className: 'kc-btn kc-btn-small', onClick: () => setPendingDelete(detailId) }, tr(t, 'delete')))),
+                : h('button', { type: 'button', className: 'kc-btn kc-btn-small', disabled: !detailReady, onClick: () => { if (isCurrentDetail()) setPendingDelete(detail.meta.id) } }, tr(t, 'delete')))),
           h(Notice, { kind: 'ok', text: notice }),
           h(Notice, { kind: 'error', text: errorNotice }),
+          pendingExit === null ? null : h('div', { className: 'kc-card', role: 'alert' },
+            h('div', { className: 'kc-warn' }, tr(t, 'unsavedChanges')),
+            h('div', { className: 'kc-row' },
+              h('button', { type: 'button', className: 'kc-btn kc-btn-primary', disabled: busy, onClick: async () => {
+                const saved = await saveEntry()
+                if (saved && pendingExit === 'close') closeDetail()
+              } }, tr(t, pendingExit === 'close' ? 'saveAndBack' : 'save')),
+              h('button', { type: 'button', className: 'kc-btn', disabled: busy, onClick: () => {
+                if (pendingExit === 'close') closeDetail()
+                else finishEditing()
+              } }, tr(t, 'discardChanges')),
+              h('button', { type: 'button', className: 'kc-btn', disabled: busy, onClick: () => {
+                setPendingExit(null)
+                setViewMode('source')
+              } }, tr(t, 'keepEditing')))),
           detailError === null ? null : h('div', { className: 'kc-error' }, `${tr(t, 'errorPrefix')}${detailError}`),
           detailLoading
             ? h('div', { className: 'kc-row' }, h(Spinner), h('span', { className: 'kc-muted' }, tr(t, 'loadingEntry')))
@@ -889,16 +1020,18 @@ window.__ModuleLoader__.load({
               h('span', null, (detail.meta.sources ?? []).join(', ')),
               h('span', null, tr(t, 'updatedAt', { time: formatDate(detail.meta.updatedAt) })),
               h('span', null, formatBytes(detail.meta.size))),
-            editing
+            editing && viewMode === 'source'
               ? h('div', { className: 'kc-detail', style: { gap: '6px' } },
                   h('div', { className: 'kc-muted', style: { fontSize: '11px' } }, tr(t, 'editHint')),
-                  h('textarea', { className: 'kc-editor', value: draft, spellCheck: false, onChange: (event) => setDraft(event.target.value) }),
+                  h('textarea', { className: 'kc-editor', value: draft, disabled: busy, spellCheck: false, 'aria-label': tr(t, 'sourceMode'), onChange: (event) => setDraft(event.target.value) }),
                   h('div', { className: 'kc-row' },
                     h('button', { type: 'button', className: 'kc-btn kc-btn-primary', disabled: busy, onClick: saveEntry }, tr(t, 'save')),
-                    h('button', { type: 'button', className: 'kc-btn', onClick: () => { setEditing(false); setDraft(detail === null ? '' : detail.source) } }, tr(t, 'cancel'))))
+                    h('button', { type: 'button', className: 'kc-btn', disabled: busy, onClick: () => requestExit('edit') }, tr(t, 'cancel'))))
               : h('div', { className: 'kc-scroll' },
                   viewMode === 'rendered'
-                    ? (detail === null ? null : renderMarkdown(detail.markdown))
+                    ? (detail === null ? null : h(React.Fragment ?? 'div', null,
+                        editing ? h('div', { className: 'kc-warn' }, tr(t, 'draftPreview')) : null,
+                        renderMarkdown(editing ? draft.replace(/^---\r?\n[\s\S]*?\r?\n---(?:\r?\n|$)/, '') : detail.markdown)))
                     : h('pre', { className: 'kc-source' }, h('code', null, detail === null ? '' : detail.source)))))
       }
 
@@ -934,14 +1067,21 @@ window.__ModuleLoader__.load({
               createError === null ? null : h('div', { className: 'kc-error', style: { flexBasis: '100%' } }, createError))
           : null,
         h(ErrorBanner, { message: error, onRetry: reload, t }),
+        h(ErrorBanner, { message: searchError, t }),
         h(Notice, { kind: 'ok', text: notice }),
         h(Notice, { kind: 'error', text: errorNotice }),
         loading && data === null
           ? h('div', { className: 'kc-row' }, h(Spinner), h('span', { className: 'kc-muted' }, tr(t, 'loading')))
           : null,
+        queryText !== '' && searchLoading
+          ? h('div', { className: 'kc-row', role: 'status' }, h(Spinner), h('span', { className: 'kc-muted' }, tr(t, 'searching')))
+          : null,
+        queryText !== '' && searchResult?.query === queryText && searchResult.collectionId === collectionFilter && !searchLoading
+          ? h('div', { className: 'kc-muted', role: 'status' }, tr(t, 'searchResultCount', { total: searchResult.total, count: entries.length }))
+          : null,
         data === null ? null : h('div', { className: 'kc-list kc-scroll' },
           entries.length === 0
-            ? h(EmptyBox, null, data.entries.length === 0 ? tr(t, 'emptyLibrary') : tr(t, 'emptySearch'))
+            ? (searchLoading || searchError !== null ? null : h(EmptyBox, null, queryText === '' && data.entries.length === 0 ? tr(t, 'emptyLibrary') : tr(t, 'emptySearch')))
             : entries.map((entry) => h('button', {
                 key: entry.id,
                 type: 'button',
@@ -955,7 +1095,7 @@ window.__ModuleLoader__.load({
                   h('span', null, (entry.sources ?? []).join(', ')),
                   h('span', null, tr(t, 'updatedAt', { time: formatDate(entry.updatedAt) })),
                   h('span', null, formatBytes(entry.size))),
-                entry.summary === '' ? null : h('div', { className: 'kc-entry-summary' }, entry.summary))),
+                (entry.snippet ?? entry.summary) === '' ? null : h('div', { className: 'kc-entry-summary' }, entry.snippet ?? entry.summary))),
           collections.length > 0
             ? h('div', { className: 'kc-card' },
                 h('div', { className: 'kc-row-between' },
@@ -970,8 +1110,8 @@ window.__ModuleLoader__.load({
     // Generate tab
     // ──────────────────────────────────────────────────────────────────────
 
-    function GenerateTab({ ctx, t, revision, notifyChanged }) {
-      const { data, loading, error, reload } = useLibrary(ctx, revision)
+    function GenerateTab({ ctx, t, library }) {
+      const { data, loading, error, reload } = library
       const [workspacePath, setWorkspacePath] = useState('')
       const [collectionId, setCollectionId] = useState('')
       const [language, setLanguage] = useState('zh')
@@ -984,6 +1124,9 @@ window.__ModuleLoader__.load({
       const [runs, setRuns] = useState([])
       const [notice, setNotice] = useState(null)
       const abortRef = useRef(null)
+      const scanRequestRef = useRef(null)
+      const workspaceRef = useRef(workspacePath)
+      workspaceRef.current = workspacePath
 
       const workspaces = data === null ? [] : data.workspaces
       const collections = data === null ? [] : data.collections
@@ -997,7 +1140,10 @@ window.__ModuleLoader__.load({
       }, [data, collections, workspacePath])
 
       useEffect(() => {
-        if (workspacePath === '' && workspaces.length > 0) setWorkspacePath(workspaces[0].path)
+        if (workspacePath === '' && workspaces.length > 0) {
+          workspaceRef.current = workspaces[0].path
+          setWorkspacePath(workspaces[0].path)
+        }
       }, [workspaces, workspacePath])
 
       useEffect(() => {
@@ -1011,18 +1157,25 @@ window.__ModuleLoader__.load({
         setCollectionId((workspaceCollection ?? availableCollections[0]).id)
       }, [availableCollections, collectionId])
 
+      const configuredLanguage = data?.settings?.outputLanguage
       useEffect(() => {
-        if (data === null) return
-        const configured = data.settings !== null && typeof data.settings === 'object' ? data.settings.outputLanguage : undefined
+        const configured = configuredLanguage
         if (configured === 'zh' || configured === 'en') setLanguage(configured)
-      }, [data])
+      }, [configuredLanguage])
 
       useEffect(() => () => {
         if (abortRef.current !== null) abortRef.current.abort()
+        scanRequestRef.current?.controller.abort()
+        scanRequestRef.current = null
       }, [])
 
       const changeWorkspace = useCallback((path) => {
+        if (abortRef.current !== null) return
+        scanRequestRef.current?.controller.abort()
+        scanRequestRef.current = null
+        workspaceRef.current = path
         setWorkspacePath(path)
+        setScanning(false)
         setScanResult(null)
         setSelected([])
         setRuns([])
@@ -1031,7 +1184,10 @@ window.__ModuleLoader__.load({
       }, [])
 
       const scan = async () => {
-        if (workspacePath === '') return
+        if (workspacePath === '' || abortRef.current !== null || workspaceRef.current !== workspacePath) return
+        scanRequestRef.current?.controller.abort()
+        const request = { workspacePath, controller: new AbortController() }
+        scanRequestRef.current = request
         setScanning(true)
         setScanError(null)
         setScanResult(null)
@@ -1039,12 +1195,13 @@ window.__ModuleLoader__.load({
         setRuns([])
         setNotice(null)
         try {
-          const value = await callRpc(ctx, 'scan', { workspacePath })
-          setScanResult(value)
+          const value = await callRpc(ctx, 'scan', { workspacePath }, request.controller.signal)
+          if (scanRequestRef.current !== request || workspaceRef.current !== request.workspacePath) return
+          setScanResult({ ...value, workspacePath: request.workspacePath, request })
         } catch (failure) {
-          setScanError(errorMessage(failure))
+          if (scanRequestRef.current === request) setScanError(errorMessage(failure))
         } finally {
-          setScanning(false)
+          if (scanRequestRef.current === request) setScanning(false)
         }
       }
 
@@ -1056,7 +1213,13 @@ window.__ModuleLoader__.load({
       }
 
       const generate = async () => {
-        if (selected.length === 0 || collectionId === '' || workspacePath === '') return
+        if (selected.length === 0 || collectionId === '' || workspacePath === '' || abortRef.current !== null) return
+        if (workspaceRef.current !== workspacePath || scanResult?.workspacePath !== workspacePath
+          || scanRequestRef.current !== scanResult.request || scanResult.request.controller.signal.aborted
+          || !selected.every((path) => scanResult.files.some((file) => file.path === path))) {
+          setScanError(tr(t, 'scanWorkspaceChanged'))
+          return
+        }
         const controller = new AbortController()
         abortRef.current = controller
         setGenerating(true)
@@ -1083,16 +1246,14 @@ window.__ModuleLoader__.load({
               : run))
           }
           setProgress({ done: index + 1, total: selected.length })
-          notifyChanged()
         }
         setGenerating(false)
         abortRef.current = null
         if (controller.signal.aborted) setNotice(tr(t, 'generationCancelled'))
         else {
           setNotice(tr(t, 'generationDone', { ok: succeeded, fail: failed }))
-          if (succeeded > 0) await reload()
-          if (succeeded > 0) notifyChanged()
         }
+        if (succeeded > 0) await reload()
       }
 
       const cancelGeneration = () => {
@@ -1103,7 +1264,9 @@ window.__ModuleLoader__.load({
         return h('div', { className: 'kc-row' }, h(Spinner), h('span', { className: 'kc-muted' }, tr(t, 'loading')))
       }
 
-      const scannedFiles = scanResult === null ? [] : scanResult.files
+      const scanIsCurrent = scanResult !== null && scanResult.workspacePath === workspacePath
+        && scanResult.request === scanRequestRef.current
+      const scannedFiles = scanIsCurrent ? scanResult.files : []
       const selectedCount = selected.length
       const doneCount = runs.filter((run) => run.status === 'done').length
       const failedCount = runs.filter((run) => run.status === 'error').length
@@ -1116,7 +1279,7 @@ window.__ModuleLoader__.load({
               h('div', { className: 'kc-row' },
                 h('label', { className: 'kc-field' },
                   h('span', { className: 'kc-field-label' }, tr(t, 'workspace')),
-                  h('select', { className: 'kc-input kc-select', value: workspacePath, onChange: (event) => changeWorkspace(event.target.value), disabled: generating },
+                  h('select', { className: 'kc-input kc-select', value: workspacePath, onChange: (event) => changeWorkspace(event.target.value), disabled: generating || scanning, 'aria-label': tr(t, 'workspace') },
                     workspaces.map((workspace) => h('option', { key: workspace.id, value: workspace.path }, workspace.title)))),
                 h('label', { className: 'kc-field' },
                   h('span', { className: 'kc-field-label' }, tr(t, 'targetLibrary')),
@@ -1132,7 +1295,7 @@ window.__ModuleLoader__.load({
                 h('button', { type: 'button', className: 'kc-btn', onClick: scan, disabled: scanning || generating }, scanning ? `${tr(t, 'scanning')}` : scanResult === null ? tr(t, 'scan') : tr(t, 'rescan'))),
               h('div', { className: 'kc-muted', style: { fontSize: '11px', lineHeight: '17px' } }, tr(t, 'generateHint'))),
         scanError === null ? null : h('div', { className: 'kc-error' }, `${tr(t, 'errorPrefix')}${scanError}`),
-        scanResult === null
+        !scanIsCurrent
           ? null
           : h('div', { className: 'kc-card' },
               h('div', { className: 'kc-row-between' },
@@ -1166,7 +1329,7 @@ window.__ModuleLoader__.load({
                 h('span', { className: 'kc-muted' }, tr(t, 'progress', { done: progress.done, total: progress.total }))),
               h('div', { className: 'kc-progress' },
                 h('div', { className: 'kc-progress-bar' },
-                  h('div', { className: 'kc-progress-fill', style: { width: `${progress.total === 0 ? 0 : Math.round((progress.done / progress.total) * 100)}%` } }))))
+                  h('div', { className: 'kc-progress-fill', role: 'progressbar', 'aria-label': tr(t, 'generating'), 'aria-valuemin': 0, 'aria-valuemax': progress.total, 'aria-valuenow': progress.done, style: { width: `${progress.total === 0 ? 0 : Math.round((progress.done / progress.total) * 100)}%` } }))))
           : null,
         h(Notice, { kind: 'ok', text: notice }),
         runs.length === 0
@@ -1188,8 +1351,8 @@ window.__ModuleLoader__.load({
     // Access & settings tab
     // ──────────────────────────────────────────────────────────────────────
 
-    function PermissionsTab({ ctx, t, revision, notifyChanged }) {
-      const { data, loading, error, reload } = useLibrary(ctx, revision)
+    function PermissionsTab({ ctx, t, library }) {
+      const { data, loading, error, reload } = library
       const [pendingPath, setPendingPath] = useState(null)
       const [notice, setNotice] = useState(null)
       const [errorNotice, setErrorNotice] = useState(null)
@@ -1203,7 +1366,6 @@ window.__ModuleLoader__.load({
           await callRpc(ctx, 'setPermission', { workspacePath: workspace.path, allowed: !workspace.allowed })
           setNotice(tr(t, 'permissionUpdated'))
           await reload()
-          notifyChanged()
         } catch (failure) {
           setErrorNotice(`${tr(t, 'errorPrefix')}${errorMessage(failure)}`)
         } finally {
@@ -1346,12 +1508,13 @@ window.__ModuleLoader__.load({
 
     function KnowledgeCenterSection({ ctx, t, chromeless = false }) {
       const [tab, setTab] = useState('library')
-      const [revision, setRevision] = useState(0)
-      const notifyChanged = useCallback(() => setRevision((value) => value + 1), [])
+      const [sectionId] = useState(() => `kc-section-${++sectionSequence}`)
+      const [, setLocaleRevision] = useState(0)
+      const library = useLibrary(ctx)
 
       useEffect(() => {
         if (ctx.locale === undefined || typeof ctx.locale.subscribe !== 'function') return undefined
-        const unsubscribe = ctx.locale.subscribe(() => setRevision((value) => value + 1))
+        const unsubscribe = ctx.locale.subscribe(() => setLocaleRevision((value) => value + 1))
         return () => {
           if (typeof unsubscribe === 'function') unsubscribe()
         }
@@ -1362,28 +1525,50 @@ window.__ModuleLoader__.load({
         { id: 'generate', label: tr(t, 'tabGenerate') },
         { id: 'access', label: tr(t, 'tabAccess') },
       ]
+      const recovery = library.data?.storageRecovery
+      const hasRecovery = (typeof recovery === 'string' && recovery.trim() !== '')
+        || (recovery !== null && typeof recovery === 'object')
+
+      const navigateTabs = (event, index) => {
+        let target
+        if (event.key === 'ArrowRight') target = (index + 1) % tabs.length
+        else if (event.key === 'ArrowLeft') target = (index - 1 + tabs.length) % tabs.length
+        else if (event.key === 'Home') target = 0
+        else if (event.key === 'End') target = tabs.length - 1
+        else return
+        event.preventDefault()
+        setTab(tabs[target].id)
+        event.currentTarget.parentElement?.querySelector(`#${sectionId}-tab-${tabs[target].id}`)?.focus()
+      }
 
       return h('div', { className: 'kc-root' },
         h('style', { key: 'kc-styles' }, CSS),
         chromeless ? null : h('div', { className: 'kc-header' },
           h('div', { className: 'kc-title' }, tr(t, 'title')),
           h('div', { className: 'kc-subtitle kc-muted' }, tr(t, 'subtitle'))),
-        h('div', { className: 'kc-tabs', role: 'tablist' },
-          tabs.map((item) => h('button', {
+        hasRecovery ? h('div', { className: 'kc-card' },
+          h(Notice, { kind: 'warn', text: tr(t, 'storageRecovered') }),
+          h('div', null, h('button', { type: 'button', className: 'kc-btn', onClick: () => setTab('access') }, tr(t, 'tabAccess')))) : null,
+        h('div', { className: 'kc-tabs', role: 'tablist', 'aria-label': tr(t, 'title') },
+          tabs.map((item, index) => h('button', {
             key: item.id,
+            id: `${sectionId}-tab-${item.id}`,
             type: 'button',
             role: 'tab',
             'aria-selected': tab === item.id,
+            'aria-controls': `${sectionId}-panel-${item.id}`,
+            tabIndex: tab === item.id ? 0 : -1,
             className: `kc-tab${tab === item.id ? ' kc-tab-active' : ''}`,
             onClick: () => setTab(item.id),
+            onKeyDown: (event) => navigateTabs(event, index),
           }, item.label))),
         h('div', { className: 'kc-panes' },
-          h('div', { className: 'kc-pane', style: { display: tab === 'library' ? 'flex' : 'none' } },
-            h(LibraryTab, { ctx, t, revision, notifyChanged })),
-          h('div', { className: 'kc-pane', style: { display: tab === 'generate' ? 'flex' : 'none' } },
-            h(GenerateTab, { ctx, t, revision, notifyChanged })),
-          h('div', { className: 'kc-pane', style: { display: tab === 'access' ? 'flex' : 'none' } },
-            h(PermissionsTab, { ctx, t, revision, notifyChanged }))))
+          h('div', { className: 'kc-pane', id: `${sectionId}-panel-library`, role: 'tabpanel', 'aria-labelledby': `${sectionId}-tab-library`, hidden: tab !== 'library', tabIndex: 0, style: { display: tab === 'library' ? 'flex' : 'none' } },
+            h(LibraryTab, { ctx, t, library })),
+          h('div', { className: 'kc-pane', id: `${sectionId}-panel-generate`, role: 'tabpanel', 'aria-labelledby': `${sectionId}-tab-generate`, hidden: tab !== 'generate', tabIndex: 0, style: { display: tab === 'generate' ? 'flex' : 'none' } },
+            h(GenerateTab, { ctx, t, library })),
+          h('div', { className: 'kc-pane', id: `${sectionId}-panel-access`, role: 'tabpanel', 'aria-labelledby': `${sectionId}-tab-access`, hidden: tab !== 'access', tabIndex: 0, style: { display: tab === 'access' ? 'flex' : 'none' } },
+            h(PermissionsTab, { ctx, t, library }))))
     }
 
     // ──────────────────────────────────────────────────────────────────────

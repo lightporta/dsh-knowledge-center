@@ -27,3 +27,6 @@ coverage/
 *.tsbuildinfo
 *.tmp
 *.temp
+
+# Local review snapshots and one-off validation artifacts (not for publishing)
+.local-archive/

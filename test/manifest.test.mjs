@@ -2,7 +2,7 @@
  * Repository manifest consistency tests.
  *
  * These guard the published bundle shape that DeepSeek Harness' Plugin Manager
- * reads: package identity, bundle patch, client loader id, locales, icon and
+ * reads: package identity, bundle patch, client loader id, locales and
  * license. Run with: node --test
  */
 import test from 'node:test'
@@ -17,21 +17,20 @@ const pkg = readJson('package.json')
 
 test('package identity is the published plugin name', () => {
   assert.equal(pkg.name, 'dsh-knowledge-center')
-  assert.equal(pkg.version, '1.0.0')
+  assert.match(pkg.version, /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/)
   assert.equal(pkg.license, 'MIT')
   assert.equal(pkg.type, 'module')
   assert.equal(pkg.private, undefined)
-  assert.equal(pkg.engines.node, '>=20.0.0')
+  assert.equal(pkg.engines.node, '>=20.3.0')
   assert.equal(pkg.engines.dsh, '>=0.2.1-rc.3')
 })
 
 test('exports and files cover every runtime artifact', () => {
   assert.equal(pkg.exports['.'], './index.js')
   assert.equal(pkg.exports['./client'], './client.js')
-  assert.equal(pkg.exports['./icon'], './icon.png')
   assert.equal(pkg.dsh.bundle.patch, './cordis.patch.yml')
   assert.equal(pkg.dsh.client.platform, 'web')
-  for (const file of ['index.js', 'client.js', 'cordis.patch.yml', 'icon.png', 'LICENSE', 'README.md']) {
+  for (const file of ['index.js', 'client.js', 'cordis.patch.yml', 'LICENSE', 'README.md']) {
     assert.ok(existsSync(resolve(root, file)), `${file} must exist`)
   }
   for (const file of ['lib/paths.js', 'lib/text.js']) {
@@ -63,13 +62,7 @@ test('locale resources carry the plugin inventory metadata', () => {
   }
 })
 
-test('icon is the DeepSeek Harness PNG within the 256 KiB limit and the license matches', () => {
-  const icon = readFileSync(resolve(root, 'icon.png'))
-  assert.equal(icon[0], 0x89)
-  assert.equal(icon.subarray(1, 4).toString('latin1'), 'PNG')
-  assert.ok(icon.length < 256 * 1024, 'icon must be under 256 KiB')
-  assert.ok(icon.readUInt32BE(16) >= 64, 'icon width')
-  assert.ok(icon.readUInt32BE(20) >= 64, 'icon height')
+test('license matches the package license', () => {
   const license = readFileSync(resolve(root, 'LICENSE'), 'utf8')
   assert.match(license, /^MIT License/)
   assert.match(license, /Copyright \(c\) 2026/)

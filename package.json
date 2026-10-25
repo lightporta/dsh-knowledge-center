@@ -20,7 +20,6 @@
     ".": "./index.js",
     "./client": "./client.js",
     "./locale/*.json": "./locale/*.json",
-    "./icon": "./icon.png",
     "./package.json": "./package.json"
   },
   "files": [
@@ -29,16 +28,17 @@
     "client.js",
     "cordis.patch.yml",
     "locale/*.json",
-    "icon.png",
     "README.md",
+    "docs/fixes-2026-10-25.md",
+    "docs/VERIFICATION.md",
     "LICENSE"
   ],
   "scripts": {
-    "test": "node --test",
-    "check": "node --check index.js && node --check client.js && node --check lib/paths.js && node --check lib/text.js && node --check lib/extract.js && node --check test/paths.test.mjs && node --check test/text.test.mjs && node --check test/manifest.test.mjs && node --check test/client-bundle.test.mjs && node --check test/extract.test.mjs"
+    "test": "node scripts/test.mjs",
+    "check": "node scripts/check.mjs"
   },
   "engines": {
-    "node": ">=20.0.0",
+    "node": ">=20.3.0",
     "dsh": ">=0.2.1-rc.3"
   },
   "dsh": {
