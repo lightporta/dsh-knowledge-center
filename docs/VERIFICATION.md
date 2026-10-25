@@ -104,3 +104,9 @@ Results here describe local automated checks. They do not certify real-model cal
 - 测试：本地资产，`test/` 已被 `.gitignore` 忽略；用例与结果统一记录在 [test.md](../test.md)。v1.3.0 完整套件 116/116 连续 3 轮通过（Windows，Node.js 24.16.0）。
 - 发布检查：`npm run check` 通过；`npm pack --dry-run` 为 15 个文件（新增 test.md），版本 1.3.0。
 - 未验证：三平台 CI（推送后确认）、10MB 端到端、附件与共享（B/C 阶段）。
+
+## v1.4.0（B 阶段：会话附件）
+
+- 新增 `knowledge_ingest_attachment`：从当前会话 file 块收集内容寻址附件，校验附件根目录后按扩展名提取（文本 / PDF / OOXML），复用提炼管线写入当前工作区库；来源记为 `附件/<name>`。
+- 本地回归 117/117 连续 2 轮通过（Windows，Node.js 24.16.0）；`npm run check` 通过。
+- 未验证：真实宿主重启后的附件端到端（docx / PDF）、10MB 附件、三平台 CI。

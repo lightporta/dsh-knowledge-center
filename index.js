@@ -13,7 +13,7 @@
  *   entries/<id>.md       one knowledge note, YAML front matter + Markdown body
  */
 import { promises as fsp } from 'node:fs'
-import { join, basename, extname } from 'node:path'
+import { join, basename, dirname, extname } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import {
   canonicalPath,
@@ -973,14 +973,88 @@ async function resolveCollectionForIngest(store, workspace, collectionId, actor 
  * Distill one workspace document and persist it as a knowledge entry.
  * Re-running the same source updates the existing entry (Repo-Wiki style).
  */
-async function ingestDocument(ctx, store, { workspace, collection, relativePath, language, signal }) {
+/**
+ * Collect file blocks referenced by the current session. The walk is tolerant
+ * to the event envelope: any object shaped like a file block is collected once.
+ */
+function sessionFileAttachments(ctx, agentId) {
+  const live = typeof agentId === 'string' ? ctx.agents.get(agentId) : undefined
+  const session = live?.session
+  if (session === undefined || session === null || typeof session.snapshotEvents !== 'function') return []
+  const refs = []
+  const seen = new Set()
+  const visit = (value, depth) => {
+    if (depth > 10 || refs.length >= 32 || value === null || typeof value !== 'object') return
+    if (Array.isArray(value)) {
+      for (const item of value.slice(0, 200)) visit(item, depth + 1)
+      return
+    }
+    if (value.type === 'file' && typeof value.attachment?.attachmentId === 'string') {
+      const ref = value.attachment
+      if (!seen.has(ref.attachmentId)) {
+        seen.add(ref.attachmentId)
+        refs.push(ref)
+      }
+      return
+    }
+    for (const key of Object.keys(value)) visit(value[key], depth + 1)
+  }
+  visit(session.snapshotEvents(), 0)
+  return refs
+}
+
+/** Content-addressed host path used when the attachment service cannot resolve one. */
+function attachmentHostPath(ref, root) {
+  const raw = ref.attachmentId.startsWith('sha256:') ? ref.attachmentId.slice(7) : ref.attachmentId
+  return join(root, 'v1', 'files', raw.slice(0, 2), raw, ref.name)
+}
+
+/**
+ * Read one attachment and reduce it to text with the same extractors used for
+ * workspace files. The resolved path must stay inside the attachment store.
+ */
+async function readAttachmentSource(ctx, ref, { signal, resolveExecutable, attachmentsRoot } = {}) {
+  const service = ctx.get('attachments')
+  let hostPath
+  if (service !== undefined && service !== null && typeof service.fileHostPath === 'function') {
+    try {
+      hostPath = service.fileHostPath(ref)
+    } catch {
+      hostPath = undefined
+    }
+  }
+  const rootDir = attachmentsRoot ?? join(resolveDshHome(), 'attachments')
+  if (typeof hostPath !== 'string' || hostPath.length === 0) hostPath = attachmentHostPath(ref, rootDir)
+  const real = await fsp.realpath(hostPath)
+  const root = await fsp.realpath(rootDir)
+  if (!isSameOrInside(root, real)) throw new Error('Attachment path is outside the attachment store.')
+  const extension = extname(real).toLowerCase()
+  if (!DOCUMENT_EXTENSIONS.has(extension)) throw new Error(`Unsupported attachment type "${extension}": ${ref.name}`)
+  const info = await fsp.stat(real)
+  const limit = TEXT_EXTENSIONS.has(extension) ? MAX_TEXT_BYTES : MAX_BINARY_BYTES
+  if (info.size > limit) throw new Error(`Attachment is larger than ${Math.round(limit / (1024 * 1024))} MiB: ${ref.name}`)
+  const bytes = await fsp.readFile(real)
+  if (TEXT_EXTENSIONS.has(extension)) {
+    const raw = bytes.toString('utf8')
+    return { text: extension === '.html' || extension === '.htm' ? extractHtmlText(raw) : raw }
+  }
+  if (PDF_EXTENSIONS.has(extension)) return { text: await extractPdfText(bytes, { signal, resolveExecutable }) }
+  if (LEGACY_OFFICE_EXTENSIONS.has(extension)) {
+    throw new Error(`Legacy Office attachments need the office-to-PDF service: ${ref.name}`)
+  }
+  return { text: extractStructuredDocumentText({ extension, bytes }) }
+}
+
+async function ingestDocument(ctx, store, { workspace, collection, relativePath, language, signal, text: preExtracted }) {
   const sourcePath = workspaceSourcePath(workspace.path, relativePath)
   if (sourcePath.length === 0) throw new Error('Source path must point to a workspace document.')
-  const source = await readWorkspaceSource(ctx, workspace.path, sourcePath, {
-    signal,
-    resolveExecutable: createExecutableResolver(ctx),
-    officeToPdf: ctx.get('officeToPdf'),
-  })
+  const source = preExtracted === undefined
+    ? await readWorkspaceSource(ctx, workspace.path, sourcePath, {
+      signal,
+      resolveExecutable: createExecutableResolver(ctx),
+      officeToPdf: ctx.get('officeToPdf'),
+    })
+    : { text: preExtracted }
   const distilled = await distillDocument(ctx, {
     text: source.text,
     relPath: sourcePath,
@@ -1200,6 +1274,15 @@ const READ_OUTPUT = {
   required: ['id', 'title', 'markdown'],
 }
 
+const ATTACHMENT_INGEST_PARAMETERS = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    name: { type: 'string', description: 'Attachment file name to distill. Omit to distill every file attached to this conversation.' },
+    collectionId: { type: 'string', description: 'Target knowledge base id. Defaults to the current workspace library.' },
+    language: { type: 'string', enum: ['zh', 'en'] },
+  },
+}
 const INGEST_PARAMETERS = {
   type: 'object',
   additionalProperties: false,
@@ -1749,6 +1832,60 @@ export function apply(ctx) {
     isConcurrencySafe: () => true,
   }))
 
+  ctx.effect(() => ctx.tools.register({
+    name: 'knowledge_ingest_attachment',
+    description:
+      'Distill files the user attached to this conversation into the current workspace knowledge base. '
+      + 'Only use this when the user explicitly asks to turn an attachment into knowledge. '
+      + 'It writes to the current workspace library; global or shared libraries stay owner-only.',
+    parameters: ATTACHMENT_INGEST_PARAMETERS,
+    output: {
+      schema: INGEST_OUTPUT,
+      render: (args, value) => textBlock(JSON.stringify(value, null, 2)),
+    },
+    presentCall: (args) => ({
+      card: 'generic',
+      title: 'Distill an attachment into Knowledge Center',
+      kind: 'other',
+      rawInput: args,
+    }),
+    timeoutMs: 600_000,
+    async execute(args, exec) {
+      const input = asRecord(args)
+      const { cwd, index } = await resolveToolWorkspace(ctx, store, exec)
+      const workspace = findWorkspace(ctx, cwd)
+      if (workspace === undefined) throw new Error(`The current directory is not a registered workspace: ${cwd}`)
+      const language = knowledgeLanguage(index, input.language === 'en' || input.language === 'zh' ? input.language : undefined)
+      const collection = await resolveCollectionForIngest(store, workspace, asOptionalString(input.collectionId), 'tool')
+      const wanted = asOptionalString(input.name)
+      const refs = sessionFileAttachments(ctx, exec.agent?.id)
+      const selected = wanted === undefined ? refs : refs.filter((ref) => ref.name === wanted)
+      if (selected.length === 0) {
+        throw new Error(wanted === undefined
+          ? 'No file attachments were found in this conversation.'
+          : `No attachment named ${wanted} was found in this conversation.`)
+      }
+      const entries = []
+      const failed = []
+      for (const ref of selected.slice(0, 3)) {
+        try {
+          const source = await readAttachmentSource(ctx, ref, { signal: exec.signal, resolveExecutable: createExecutableResolver(ctx), attachmentsRoot: join(dirname(store.root), 'attachments') })
+          const result = await ingestDocument(ctx, store, {
+            workspace,
+            collection,
+            language,
+            signal: exec.signal,
+            relativePath: `附件/${ref.name}`,
+            text: source.text,
+          })
+          entries.push(result.entry)
+        } catch (error) {
+          failed.push({ path: ref.name, reason: error instanceof Error ? error.message : String(error) })
+        }
+      }
+      return { workspace: canonicalPath(workspace.path), entries, failed }
+    },
+  }))
   ctx.effect(() => ctx.tools.register({
     name: 'knowledge_read',
     description:

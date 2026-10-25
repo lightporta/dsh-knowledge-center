@@ -49,7 +49,7 @@
   - 默认**所有工作区均未授权**；模型工具在未授权工作区会明确拒绝。
   - 每个工作区单独开关「允许模型调用」。
 - **模型工具与提示词**
-  - `knowledge_search` / `knowledge_read` / `knowledge_ingest` 三个工具，带自动工具卡片。
+  - `knowledge_search` / `knowledge_read` / `knowledge_ingest` / `knowledge_ingest_attachment` 四个工具，带自动工具卡片；附件工具只处理当前会话 attach 的文件，且只能写入当前工作区库。
   - 向模型注入一节系统提示词，说明知识中心能力、权限边界，以及「被拒绝时不要重试、不要绕过」。
 
 ### 支持的文档格式
@@ -348,7 +348,7 @@ The interaction model is inspired by Qoder CN's knowledge features:
   - Every workspace is **denied by default**; model tools refuse to run without a grant.
   - One toggle per workspace ("Allow model access").
 - **Model tools and prompt section**
-  - `knowledge_search`, `knowledge_read`, `knowledge_ingest`, each with a tool call card.
+  - `knowledge_search`, `knowledge_read`, `knowledge_ingest`, `knowledge_ingest_attachment`, each with a tool call card. The attachment tool only accepts files attached to the current conversation and writes to the current workspace library.
   - A system-prompt section explains the capability and the permission boundary, including "do not retry or bypass when access is denied".
 
 ### Supported document formats
