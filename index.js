@@ -66,6 +66,10 @@ const MAX_SCAN_FILES = 400
 const MAX_CHUNK_CHARS = 12_000
 const MAX_CHUNKS = 6
 const KNOWLEDGE_TIMEOUT_MS = 180_000
+// One structured note, plus the reasoning tokens a model with a reasoning
+// effort spends inside the same max_tokens budget. A 3000-token cap truncated
+// ordinary documents as soon as the default model reasoned (finish "max-tokens").
+const KNOWLEDGE_MAX_TOKENS = 16_000
 const TOOL_LIMIT_DEFAULT = 8
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -430,7 +434,7 @@ async function generateText(ctx, { system, prompt, signal, selection = pickModel
   }
   const timeout = AbortSignal.timeout(KNOWLEDGE_TIMEOUT_MS)
   const combined = signal === undefined ? timeout : AbortSignal.any([signal, timeout])
-  const call = await llm.prepareCall({ ...selection, maxTokens: 3000 }, combined)
+  const call = await llm.prepareCall({ ...selection, maxTokens: KNOWLEDGE_MAX_TOKENS }, combined)
   const options = {
     ...call.config,
     messages: [{ role: 'user', content: [{ type: 'text', text: prompt }] }],
