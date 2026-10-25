@@ -131,3 +131,8 @@ Results here describe local automated checks. They do not certify real-model cal
 
 - 共享卡片可见；新建 `testshared` 并勾选两个工作区；readers 与 4 条 grant/revoke 审计已落盘。
 - 未执行：跨工作区浏览器检索断言、三平台 CI。
+
+### v1.7.0（共享写入与移动）
+
+- 修复共享库不可写：客户端目标库放行 `scope:shared`；新增 owner RPC `moveEntry` 与条目详情「移动到…」。
+- 本地回归 119/119（新增移动用例）。

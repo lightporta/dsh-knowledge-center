@@ -15,13 +15,13 @@ $files = Get-ChildItem test -Filter '*.test.mjs' | ForEach-Object { $_.FullName 
 node --test $files
 ```
 
-## 当前用例（118 项）
+## 当前用例（119 项）
 
 | 文件 | 覆盖 | 用例数 |
 | --- | --- | --- |
 | `test/client-behavior.test.mjs` | 详情串页误删、旧响应与错误、编辑草稿、扫描与搜索竞态、共享刷新、恢复提示、键盘操作 | 21 |
 | `test/extract.test.mjs` | DOCX/XLSX/PPTX/HTML/PDF 提取、解压预算、取消传播 | 27 |
-| `test/host.test.mjs` | RPC、授权、生成、检索、预算阶梯与 max 兜底、截断回执、版本门/迁移、S1 收口、会话附件提炼、**v1.5 库级共享与撤销** | 22 |
+| `test/host.test.mjs` | RPC、授权、生成、检索、预算阶梯与 max 兜底、截断回执、版本门/迁移、S1 收口、会话附件提炼、库级共享与撤销、**v1.7 共享库写入与移动** | 23 |
 | `test/lock.test.mjs` | 同进程与真实子进程互斥、锁释放、崩溃回收、Windows 注入回归 | 15 |
 | `test/manifest.test.mjs` | 包入口、发布文件、bundle、locale、许可证一致性 | 6 |
 | `test/paths.test.mjs` | win32/darwin/POSIX 路径规则、工作区边界、来源身份 | 11 |
@@ -32,7 +32,7 @@ node --test $files
 
 | 日期 | 环境 | 轮次 | 结果 |
 | --- | --- | --- | --- |
-| 2026-10-25 | Windows 11，Node.js 24.16.0 | 1 | 118/118 通过，0 失败/跳过/取消 |
+| 2026-10-25 | Windows 11，Node.js 24.16.0 | 1 | 119/119 通过，0 失败/跳过/取消 |
 
 v1.2.0 发布前同一套件在 Windows（Node.js 22.23.4 与 24.16.0）下连续 3 轮 113/113；v1.3.0 新增 3 项版本门与 S1 用例后为 116 项。
 
@@ -90,3 +90,9 @@ v1.2.0 发布前同一套件在 Windows（Node.js 22.23.4 与 24.16.0）下连�
 - `index.json`：readers = `D:\dsh-knowledge-center`、`D:\Edgefile\Photo_storage`；`permissions` 两者均为 true。
 - 审计：4 条记录（grant Photo_storage → grant dsh-knowledge-center → revoke Photo_storage → grant Photo_storage），actor=owner。
 - 未执行：浏览器内跨工作区检索断言（需要以 Photo_storage 为工作区开一个会话）；三平台 CI。
+
+### v1.7.0（共享写入与移动）
+
+- 修复实机验收发现的两个缺口：`scope:shared` 库从「生成知识」目标中被客户端过滤掉（无法写入）；工具错误提示指向 UI 中不存在的“移动”动作。
+- 「生成知识」现在可选共享库作为目标（owner）；条目详情新增「移动到…」，由 owner 把一个条目迁移到另一个库（含共享库），解决同一来源跨库重复。
+- 模型工具仍只能写当前工作区库；共享/撤销/移动都走 owner RPC。

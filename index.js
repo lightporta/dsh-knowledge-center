@@ -946,7 +946,7 @@ async function resolveCollectionForIngest(store, workspace, collectionId, actor 
     if (actor === 'tool' && collection.scope !== 'workspace') {
       throw new Error(
         `The model tool can only write to the current workspace's knowledge base. `
-        + `Ask the user to move this note into "${collection.name}" from Settings → 知识中心 (Knowledge Center).`,
+        + `The owner can move this note, or generate it into "${collection.name}", from the Knowledge Center UI.`,
       )
     }
     if (collection.scope === 'workspace' && comparisonKey(collection.workspacePath) !== comparisonKey(workspace.path)) {
@@ -1636,6 +1636,21 @@ function createApi(ctx, store) {
         })),
         shares: Array.isArray(index.shares) ? index.shares : [],
       }
+    },
+    async moveEntry(payload) {
+      const data = asRecord(payload)
+      const id = asString(data.id, 'id')
+      const collectionId = asString(data.collectionId, 'collectionId')
+      const now = Date.now()
+      return store.mutate((index) => {
+        const entry = index.entries.find((candidate) => candidate.id === id)
+        if (entry === undefined) throw new Error(`Knowledge note not found: ${id}`)
+        const collection = index.collections.find((candidate) => candidate.id === collectionId)
+        if (collection === undefined) throw new Error(`Unknown knowledge base: ${collectionId}`)
+        entry.collectionId = collection.id
+        entry.updatedAt = now
+        return entryMetadata(index, entry)
+      })
     },
     async deleteEntry(payload) {
       const data = asRecord(payload)

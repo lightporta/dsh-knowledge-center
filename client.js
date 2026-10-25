@@ -98,6 +98,9 @@ window.__ModuleLoader__.load({
       shareCreated: '共享库已创建',
       shareGranted: '已共享给该工作区',
       shareRevoked: '已取消共享',
+      moveTo: '移动到…',
+      move: '移动',
+      entryMoved: '条目已移动',
       errorPrefix: '操作失败：',
       noModel: '未检测到默认模型，请先在「设置 → 模型」中配置。',
       editHint: '编辑完整 Markdown 源码后保存；front matter 中的 title / summary / sources 会同步到索引。',
@@ -204,6 +207,9 @@ window.__ModuleLoader__.load({
       shareCreated: 'Shared library created',
       shareGranted: 'Shared with this workspace',
       shareRevoked: 'Sharing revoked',
+      moveTo: 'Move to…',
+      move: 'Move',
+      entryMoved: 'Note moved',
       errorPrefix: 'Failed: ',
       noModel: 'No default model detected. Configure one in Settings → Models.',
       editHint: 'Edit the complete Markdown source and save; title / summary / sources from the front matter are synced into the index.',
@@ -720,6 +726,7 @@ window.__ModuleLoader__.load({
       const [searchError, setSearchError] = useState(null)
       const searchRequestRef = useRef(null)
       const [detailId, setDetailId] = useState(null)
+      const [moveTarget, setMoveTarget] = useState('')
       const [detail, setDetail] = useState(null)
       const [detailError, setDetailError] = useState(null)
       const [detailLoading, setDetailLoading] = useState(false)
@@ -910,6 +917,25 @@ window.__ModuleLoader__.load({
         }
       }
 
+      const moveEntryTo = async (target) => {
+        if (detail === null || target === '') return
+        setBusy(true)
+        setNotice(null)
+        setErrorNotice(null)
+        detailMutationRef.current = true
+        try {
+          const moved = await callRpc(ctx, 'moveEntry', { id: detail.meta.id, collectionId: target })
+          setMoveTarget('')
+          setNotice(tr(t, 'entryMoved'))
+          setDetail((current) => (current === null ? current : { ...current, meta: moved }))
+          await reload()
+        } catch (failure) {
+          setErrorNotice(`${tr(t, 'errorPrefix')}${errorMessage(failure)}`)
+        } finally {
+          detailMutationRef.current = false
+          setBusy(false)
+        }
+      }
       const deleteCollection = async (id) => {
         setBusy(true)
         setNotice(null)
@@ -999,6 +1025,17 @@ window.__ModuleLoader__.load({
                 h('button', { type: 'button', disabled: !detailReady, 'data-active': viewMode === 'source', onClick: () => setViewMode('source') }, tr(t, 'sourceMode'))),
               h('button', { type: 'button', className: 'kc-btn kc-btn-small', disabled: !detailReady, onClick: copyCurrent }, tr(t, 'copy')),
               h('button', { type: 'button', className: 'kc-btn kc-btn-small', disabled: !detailReady, onClick: downloadCurrent }, tr(t, 'download')),
+              h('select', {
+                className: 'kc-input',
+                'aria-label': tr(t, 'moveTo'),
+                value: moveTarget,
+                disabled: busy || !detailReady,
+                onChange: (event) => setMoveTarget(event.target.value),
+              },
+                h('option', { value: '' }, tr(t, 'moveTo')),
+                (data?.collections ?? []).filter((collection) => collection.id !== detail?.meta?.collectionId)
+                  .map((collection) => h('option', { key: collection.id, value: collection.id }, collection.name))),
+              h('button', { type: 'button', className: 'kc-btn kc-btn-small', disabled: moveTarget === '' || busy || !detailReady || editing, onClick: () => moveEntryTo(moveTarget) }, tr(t, 'move')),
               editing
                 ? h('button', { type: 'button', className: 'kc-btn kc-btn-small kc-btn-primary', disabled: busy, onClick: saveEntry }, tr(t, 'save'))
                 : h('button', { type: 'button', className: 'kc-btn kc-btn-small', disabled: !detailReady, onClick: () => { if (!isCurrentDetail()) return; setEditing(true); setViewMode('source'); setDraft(detail.source) } }, tr(t, 'edit')),
@@ -1150,7 +1187,7 @@ window.__ModuleLoader__.load({
       const availableCollections = useMemo(() => {
         if (data === null) return []
         return collections.filter((collection) => {
-          if (collection.scope === 'user') return true
+          if (collection.scope === 'user' || collection.scope === 'shared') return true
           return workspacePath !== '' && collection.workspacePath !== null && collection.workspacePath === workspacePath
         })
       }, [data, collections, workspacePath])
