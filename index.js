@@ -50,7 +50,7 @@ export const inject = [
 
 /** Package-private Runtime RPC route prefix (browser half calls it via context.connection.rpc.call). */
 const CHANNEL = '/knowledge-center'
-const INDEX_VERSION = 2
+const INDEX_VERSION = 3
 const DEFAULT_COLLECTION_ID = 'shared'
 const DEFAULT_COLLECTION_NAME = '全局知识库'
 /** Text-like and binary limits; extracted text is later bounded by the 72k distillation budget. */
@@ -247,6 +247,7 @@ function ensureShape(index) {
   if (!Array.isArray(safe.collections)) safe.collections = []
   if (!Array.isArray(safe.entries)) safe.entries = []
   if (safe.permissions === null || typeof safe.permissions !== 'object' || Array.isArray(safe.permissions)) safe.permissions = {}
+  if (!Array.isArray(safe.shares)) safe.shares = []
   if (safe.settings === null || typeof safe.settings !== 'object' || Array.isArray(safe.settings)) safe.settings = { outputLanguage: 'zh' }
   if (typeof safe.settings.outputLanguage !== 'string') safe.settings.outputLanguage = 'zh'
   const hasUserCollection = safe.collections.some((collection) => collection.scope === 'user')
@@ -885,9 +886,12 @@ function collectionName(index, collectionId) {
 
 function accessibleCollectionIds(index, cwd) {
   const ids = new Set()
+  const target = comparisonKey(cwd)
   for (const collection of index.collections) {
     if (collection.scope === 'user') ids.add(collection.id)
-    else if (collection.scope === 'workspace' && comparisonKey(collection.workspacePath) === comparisonKey(cwd)) {
+    else if (collection.scope === 'workspace' && comparisonKey(collection.workspacePath) === target) {
+      ids.add(collection.id)
+    } else if (collection.scope === 'shared' && Array.isArray(collection.readers) && collection.readers.some((reader) => comparisonKey(reader) === target || isSameOrInside(canonicalPath(reader), cwd))) {
       ids.add(collection.id)
     }
   }
@@ -1538,7 +1542,7 @@ function createApi(ctx, store) {
     async createCollection(payload) {
       const data = asRecord(payload)
       const collectionNameInput = asString(data.name, 'name').trim().slice(0, 80)
-      const scope = data.scope === 'workspace' ? 'workspace' : 'user'
+      const scope = data.scope === 'workspace' ? 'workspace' : data.scope === 'shared' ? 'shared' : 'user'
       let workspacePath = null
       if (scope === 'workspace') {
         const workspace = await requireWorkspace(ctx, asString(data.workspacePath, 'workspacePath'))
@@ -1551,6 +1555,7 @@ function createApi(ctx, store) {
           name: collectionNameInput,
           scope,
           workspacePath,
+          readers: [],
           createdAt: now,
           updatedAt: now,
         }
@@ -1560,6 +1565,7 @@ function createApi(ctx, store) {
           name: collection.name,
           scope: collection.scope,
           workspacePath: collection.workspacePath,
+          readers: collection.readers ?? [],
           createdAt: collection.createdAt,
           updatedAt: collection.updatedAt,
           entryCount: 0,
@@ -1583,6 +1589,54 @@ function createApi(ctx, store) {
       return { deleted: removed.length }
     },
 
+    async setCollectionShare(payload) {
+      const data = asRecord(payload)
+      const collectionId = asString(data.collectionId, 'collectionId')
+      const workspace = await requireWorkspace(ctx, asString(data.workspacePath, 'workspacePath'))
+      const workspacePath = canonicalPath(workspace.path)
+      const allowed = data.allowed !== false
+      const now = Date.now()
+      return store.mutate((index) => {
+        const collection = index.collections.find((candidate) => candidate.id === collectionId)
+        if (collection === undefined) throw new Error(`Unknown knowledge base: ${collectionId}`)
+        if (collection.scope !== 'shared') throw new Error('Only a shared knowledge base can be granted to other workspaces.')
+        if (!Array.isArray(index.shares)) index.shares = []
+        const key = comparisonKey(workspacePath)
+        const readers = (collection.readers ?? []).filter((reader) => comparisonKey(reader) !== key)
+        if (allowed) readers.push(workspacePath)
+        collection.readers = readers
+        collection.updatedAt = now
+        index.shares.push({
+          id: randomUUID(),
+          collectionId,
+          workspacePath,
+          action: allowed ? 'grant' : 'revoke',
+          at: now,
+          by: 'owner',
+        })
+        return {
+          id: collection.id,
+          name: collection.name,
+          scope: collection.scope,
+          readers: collection.readers,
+          updatedAt: collection.updatedAt,
+        }
+      })
+    },
+
+    async listShares() {
+      const index = await store.readIndex()
+      return {
+        collections: index.collections.map((collection) => ({
+          id: collection.id,
+          name: collection.name,
+          scope: collection.scope,
+          workspacePath: collection.workspacePath ?? null,
+          readers: Array.isArray(collection.readers) ? collection.readers : [],
+        })),
+        shares: Array.isArray(index.shares) ? index.shares : [],
+      }
+    },
     async deleteEntry(payload) {
       const data = asRecord(payload)
       const id = asString(data.id, 'id')

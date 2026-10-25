@@ -115,3 +115,9 @@ Results here describe local automated checks. They do not certify real-model cal
 
 - 会话事件不暴露附件引用，`knowledge_ingest_attachment` 改为接受显式 `path`（附件提示里的已保存路径），并继续强制 realpath 落在 `$DSH_HOME/attachments` 内；按名称枚举仅作为兼容路径。
 - 本地回归 117/117 通过；等待宿主重启后做实机附件端到端。
+
+## v1.5.0（C 阶段：库级共享）
+
+- 索引 v3：`scope: shared` + `readers` + 追加式 `shares` 审计；可见性在 `accessibleCollectionIds` 单点判定。
+- owner RPC：创建共享库、授予/撤销、列审计；模型工具不可改可见性、不可写共享库。
+- 本地回归 118/118 通过；待实机 UI 入口与三平台 CI。

@@ -15,13 +15,13 @@ $files = Get-ChildItem test -Filter '*.test.mjs' | ForEach-Object { $_.FullName 
 node --test $files
 ```
 
-## 当前用例（117 项）
+## 当前用例（118 项）
 
 | 文件 | 覆盖 | 用例数 |
 | --- | --- | --- |
 | `test/client-behavior.test.mjs` | 详情串页误删、旧响应与错误、编辑草稿、扫描与搜索竞态、共享刷新、恢复提示、键盘操作 | 21 |
 | `test/extract.test.mjs` | DOCX/XLSX/PPTX/HTML/PDF 提取、解压预算、取消传播 | 27 |
-| `test/host.test.mjs` | RPC、授权、生成、检索、预算阶梯与 max 兜底、截断回执、v1.3 版本门/迁移/S1 收口、**v1.4 会话附件提炼** | 21 |
+| `test/host.test.mjs` | RPC、授权、生成、检索、预算阶梯与 max 兜底、截断回执、版本门/迁移、S1 收口、会话附件提炼、**v1.5 库级共享与撤销** | 22 |
 | `test/lock.test.mjs` | 同进程与真实子进程互斥、锁释放、崩溃回收、Windows 注入回归 | 15 |
 | `test/manifest.test.mjs` | 包入口、发布文件、bundle、locale、许可证一致性 | 6 |
 | `test/paths.test.mjs` | win32/darwin/POSIX 路径规则、工作区边界、来源身份 | 11 |
@@ -32,7 +32,7 @@ node --test $files
 
 | 日期 | 环境 | 轮次 | 结果 |
 | --- | --- | --- | --- |
-| 2026-10-25 | Windows 11，Node.js 24.16.0 | 2 | 117/117 通过，0 失败/跳过/取消 |
+| 2026-10-25 | Windows 11，Node.js 24.16.0 | 1 | 118/118 通过，0 失败/跳过/取消 |
 
 v1.2.0 发布前同一套件在 Windows（Node.js 22.23.4 与 24.16.0）下连续 3 轮 113/113；v1.3.0 新增 3 项版本门与 S1 用例后为 116 项。
 
@@ -70,3 +70,11 @@ v1.2.0 发布前同一套件在 Windows（Node.js 22.23.4 与 24.16.0）下连�
 - 检索：`knowledge_search("微积分 期中")` 命中 PDF 笔记（total=1，带摘要与片段）。
 - 回读：`knowledge_read` 返回完整笔记（含公式、题目与解答）。
 - 入口：v1.4.1 起使用附件提示里的显式保存路径；`realpath` 必须落在 `$DSH_HOME/attachments` 内。
+
+## v1.5.0（C 阶段：库级共享）
+
+- 数据模型 v3：集合新增 `scope: 'shared'` + `readers`（工作区路径列表）；`index.shares` 追加式记录 `grant/revoke`（时间、目标工作区、actor=owner）。
+- 可见性收口在 `accessibleCollectionIds`：`user` 全局、`workspace` 本工作区、`shared` 需命中 readers；`permissions` 仍是外层总开关。
+- owner-only RPC：`createCollection(scope:'shared')`、`setCollectionShare`、`listShares`；模型工具不能建共享库、不能改可见性，也不能写共享库。
+- 迁移：`INDEX_VERSION=3`；旧库首次读取原地升级并留副本与收据（沿用 v1.3 机制）。
+- 新增用例：A 建共享库并入库 → 授权 B → B 可检索/回读、C 不可见 → 撤销后 B 立即不可见 → 审计两条记录。
