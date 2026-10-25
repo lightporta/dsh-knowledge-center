@@ -6,7 +6,7 @@ import { EventEmitter } from 'node:events'
 import { apply } from '../../index.js'
 
 /** Exercise the plugin's public RPC route and registered tools with isolated data. */
-export async function createHostHarness(t, { stream, workspaces, dataHome } = {}) {
+export async function createHostHarness(t, { stream, workspaces, dataHome, selection } = {}) {
   const root = await mkdtemp(join(tmpdir(), 'knowledge-host-test-'))
   const workspace = join(root, 'workspace')
   await mkdir(workspace)
@@ -17,6 +17,8 @@ export async function createHostHarness(t, { stream, workspaces, dataHome } = {}
   const tools = new Map()
   const disposers = []
   const signals = []
+  /** Every selection handed to the LLM adapter, so tests can assert budgets. */
+  const calls = []
   let cwd = workspace
   const context = {
     effect(callback) {
@@ -49,9 +51,10 @@ export async function createHostHarness(t, { stream, workspaces, dataHome } = {}
       },
     },
     get(name) {
-      if (name === 'agentDefaultModel') return { currentSelection: () => ({ provider: 'test', model: 'model' }) }
+      if (name === 'agentDefaultModel') return { currentSelection: () => selection ?? { provider: 'test', model: 'model' } }
       if (name === 'llm') return {
-        async prepareCall(_selection, signal) {
+        async prepareCall(callSelection, signal) {
+          calls.push({ ...callSelection })
           signals.push(signal)
           signal.throwIfAborted()
           return {
@@ -89,7 +92,7 @@ export async function createHostHarness(t, { stream, workspaces, dataHome } = {}
     return { req, res, done }
   }
   return {
-    root, workspace, tools, signals, context, request,
+    root, workspace, tools, signals, calls, context, request,
     rpc: (method, payload, options) => request(method, payload, options).done,
     setCwd(value) { cwd = value },
     execute: (name, args) => tools.get(name).execute(args, { agent: { id: 'agent' }, signal: new AbortController().signal }),

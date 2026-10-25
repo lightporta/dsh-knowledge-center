@@ -54,7 +54,7 @@ const INDEX_VERSION = 1
 const DEFAULT_COLLECTION_ID = 'shared'
 const DEFAULT_COLLECTION_NAME = '全局知识库'
 /** Text-like and binary limits; extracted text is later bounded by the 72k distillation budget. */
-const MAX_TEXT_BYTES = 1024 * 1024
+const MAX_TEXT_BYTES = 10 * 1024 * 1024
 const MAX_BINARY_BYTES = 25 * 1024 * 1024
 const IGNORED_DIRS = new Set([
   '.git', '.hg', '.svn', 'node_modules', 'dist', 'build', 'out', '.next', '.nuxt',
@@ -64,12 +64,13 @@ const IGNORED_DIRS = new Set([
 const MAX_SCAN_DEPTH = 6
 const MAX_SCAN_FILES = 400
 const MAX_CHUNK_CHARS = 12_000
-const MAX_CHUNKS = 6
-const KNOWLEDGE_TIMEOUT_MS = 180_000
-// One structured note, plus the reasoning tokens a model with a reasoning
-// effort spends inside the same max_tokens budget. A 3000-token cap truncated
-// ordinary documents as soon as the default model reasoned (finish "max-tokens").
-const KNOWLEDGE_MAX_TOKENS = 16_000
+const MAX_CHUNKS = 16
+const KNOWLEDGE_TIMEOUT_MS = 300_000
+// One structured note plus the reasoning tokens a model spends inside the same
+// max_tokens budget. A top-effort model can still exhaust one budget, so a
+// truncated call is retried with more room and only then with a bounded effort.
+const KNOWLEDGE_MAX_TOKENS = 32_000
+const KNOWLEDGE_RETRY_TOKENS = 64_000
 const TOOL_LIMIT_DEFAULT = 8
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -424,29 +425,10 @@ function modelLabel(ctx) {
   return `${selection.provider}/${selection.model}`
 }
 
-/**
- * Distillation shares one max_tokens budget between the reasoning tokens and
- * the note itself. The top reasoning effort can spend that budget before the
- * note is finished (finish reason "max-tokens") even for a normal document,
- * so background distillation is bounded to "high"; the agent keeps whatever
- * effort the user configured.
- */
-function distillationSelection(selection) {
-  if (selection?.reasoningEffort !== 'max') return selection
-  return { ...selection, reasoningEffort: 'high' }
-}
-
-async function generateText(ctx, { system, prompt, signal, selection = pickModel(ctx) }) {
-  const llm = ctx.get('llm')
-  if (llm === undefined || llm === null) {
-    throw new Error('Knowledge Center needs the LLM service to distill documents, but it is unavailable in this profile.')
-  }
-  if (selection === undefined) {
-    throw new Error('Knowledge Center needs a default model. Configure one in Settings → Models first.')
-  }
+async function completeOnce(llm, { selection, system, prompt, maxTokens, signal }) {
   const timeout = AbortSignal.timeout(KNOWLEDGE_TIMEOUT_MS)
   const combined = signal === undefined ? timeout : AbortSignal.any([signal, timeout])
-  const call = await llm.prepareCall({ ...distillationSelection(selection), maxTokens: KNOWLEDGE_MAX_TOKENS }, combined)
+  const call = await llm.prepareCall({ ...selection, maxTokens }, combined)
   const options = {
     ...call.config,
     messages: [{ role: 'user', content: [{ type: 'text', text: prompt }] }],
@@ -465,9 +447,50 @@ async function generateText(ctx, { system, prompt, signal, selection = pickModel
   }
   combined.throwIfAborted()
   if (failure !== undefined) throw new Error(`Model call failed: ${failure.message}`)
-  if (finishReason !== 'stop') throw new Error(`Model did not complete the knowledge note (${finishReason ?? 'missing finish reason'}). Existing knowledge was not replaced.`)
+  if (finishReason !== 'stop') {
+    const error = new Error(`Model did not complete the knowledge note (${finishReason ?? 'missing finish reason'}). Existing knowledge was not replaced.`)
+    // Only a token limit is worth retrying; a broken or missing finish reason is
+    // reported at once.
+    error.code = finishReason === 'max-tokens' ? 'KNOWLEDGE_TRUNCATED' : 'KNOWLEDGE_INCOMPLETE'
+    throw error
+  }
   if (text.trim().length === 0) throw new Error('The model returned an empty distillation result.')
-  return { text, model: selection }
+  return text
+}
+
+/**
+ * Distillation shares one max_tokens budget between the reasoning tokens and
+ * the note itself. A model configured with the top reasoning effort can spend
+ * the whole budget before the note is finished, so a truncated attempt is
+ * retried with a larger budget; only if that also truncates does the call fall
+ * back to a bounded effort. The agent itself keeps the configured effort.
+ */
+async function generateText(ctx, { system, prompt, signal, selection = pickModel(ctx) }) {
+  const llm = ctx.get('llm')
+  if (llm === undefined || llm === null) {
+    throw new Error('Knowledge Center needs the LLM service to distill documents, but it is unavailable in this profile.')
+  }
+  if (selection === undefined) {
+    throw new Error('Knowledge Center needs a default model. Configure one in Settings → Models first.')
+  }
+  const attempts = [
+    { selection, maxTokens: KNOWLEDGE_MAX_TOKENS },
+    { selection, maxTokens: KNOWLEDGE_RETRY_TOKENS },
+  ]
+  if (selection.reasoningEffort === 'max') {
+    attempts.push({ selection: { ...selection, reasoningEffort: 'high' }, maxTokens: KNOWLEDGE_MAX_TOKENS })
+  }
+  let lastError
+  for (const attempt of attempts) {
+    try {
+      const text = await completeOnce(llm, { ...attempt, system, prompt, signal })
+      return { text, model: selection }
+    } catch (error) {
+      if (error.code !== 'KNOWLEDGE_TRUNCATED') throw error
+      lastError = error
+    }
+  }
+  throw lastError
 }
 
 function curatorSystem(language) {

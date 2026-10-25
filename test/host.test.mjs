@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdir, readFile, rm } from 'node:fs/promises'
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { createHostHarness } from './helpers/host-harness.mjs'
 
@@ -161,6 +161,60 @@ test('token-limited and unfinished model responses cannot overwrite a complete n
     assert.equal(result.ok, false, `finish reason ${reason} must fail`)
     assert.equal((await host.rpc('read', { id: original.value.entry.id })).value.source, before)
   }
+})
+
+test('a truncated model call is retried with a larger budget before failing', async (t) => {
+  let calls = 0
+  const host = await createHostHarness(t, {
+    async *stream() {
+      calls += 1
+      if (calls === 1) {
+        yield { type: 'text-delta', text: '# Partial' }
+        yield { type: 'finish', reason: { kind: 'max-tokens' } }
+        return
+      }
+      yield { type: 'text-delta', text: '# Retried\n\n> Complete after retry\n\nFull facts.' }
+      yield { type: 'finish', reason: { kind: 'stop' } }
+    },
+  })
+  const result = await host.rpc('ingest', { workspacePath: host.workspace, relPath: 'source.md', collectionId: 'shared' })
+  assert.equal(result.ok, true, JSON.stringify(result))
+  assert.equal(calls, 2)
+  assert.deepEqual(host.calls.map((call) => call.maxTokens), [32_000, 64_000])
+})
+
+test('the top reasoning effort falls back to a bounded effort only after bigger budgets fail', async (t) => {
+  let calls = 0
+  const host = await createHostHarness(t, {
+    selection: { provider: 'test', model: 'model', reasoningEffort: 'max' },
+    async *stream() {
+      calls += 1
+      if (calls < 3) {
+        yield { type: 'finish', reason: { kind: 'max-tokens' } }
+        return
+      }
+      yield { type: 'text-delta', text: '# Bounded\n\n> Complete at bounded effort\n\nFull facts.' }
+      yield { type: 'finish', reason: { kind: 'stop' } }
+    },
+  })
+  const result = await host.rpc('ingest', { workspacePath: host.workspace, relPath: 'source.md', collectionId: 'shared' })
+  assert.equal(result.ok, true, JSON.stringify(result))
+  assert.equal(calls, 3)
+  assert.equal(host.calls[0].reasoningEffort, 'max')
+  assert.equal(host.calls[1].maxTokens, 64_000)
+  assert.equal(host.calls[1].reasoningEffort, 'max')
+  assert.equal(host.calls[2].reasoningEffort, 'high')
+})
+
+test('a text document above the previous one-megabyte limit is distilled with truncation marked', async (t) => {
+  const host = await createHostHarness(t)
+  const body = `# Large\n\n${'A fact about the project. '.repeat(60_000)}`
+  await writeFile(join(host.workspace, 'large.md'), body)
+  const result = await host.rpc('ingest', { workspacePath: host.workspace, relPath: 'large.md', collectionId: 'shared' })
+  assert.equal(result.ok, true, JSON.stringify(result))
+  assert.equal(result.value.truncated, true)
+  const note = (await host.rpc('read', { id: result.value.entry.id })).value.source
+  assert.match(note, /truncated: true/)
 })
 
 test('owner UI and agent search share body ranking without matching hidden front matter', async (t) => {

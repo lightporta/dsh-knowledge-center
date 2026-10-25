@@ -36,7 +36,8 @@
 - **从工作区提炼知识**
   - 扫描工作区中的 Markdown / TXT / CSV / HTML / PDF / Word / Excel / PowerPoint 等文档（完整支持列表见下一节）。
   - 逐篇调用 Harness 当前默认模型，生成结构化知识 Markdown：标题、摘要、核心要点、详细内容、适用场景、来源。
-  - 长文档自动分段提炼再合并（最多 6 段，单篇最多约 72k 字符）。
+  - 长文档自动分段提炼再合并（最多 16 段，单篇最多约 192k 字符）。
+  - 提炼自愈：模型输出被推理 token 占满而截断时，先放大输出预算重试，仍然截断才降级提炼调用的推理强度；因此 `reasoningEffort: max` 下也能产出完整笔记，agent 自身的推理强度不受影响。
   - 同一「工作区 + 来源相对路径」重复生成时**更新原条目**，不会重复创建。
 - **知识库管理**
   - 支持多个知识库（Knowledge Base），作用域为「用户」或「工作区」；工作区知识库只在该工作区可用。
@@ -64,7 +65,7 @@
 
 说明：
 
-- 文本文件上限 1 MiB，二进制文档上限 25 MiB；提取文本上限 40 万字符，随后仍受提炼预算（12k × 6 ≈ 72k 字符）约束。
+- 文本文件上限 10 MiB，二进制文档上限 25 MiB；提取文本上限 40 万字符，随后仍受提炼预算（12k × 16 ≈ 192k 字符）约束。超出提炼预算的部分不送模型，并在 front matter 中标记 `truncated: true`：10 MiB 级文件可以被接受并提炼预算内有代表性的内容，而不是整篇逐段精读（那需要数百次模型调用）。
 - OOXML/PDF 解压预算为单项 16 MiB、累计 64 MiB；OOXML 忽略未使用的媒体资源。PDF 回退遇到冲突字体映射会明确报错，请使用 pdftotext。
 - PDF 只提取**文本层**；扫描件/纯图片 PDF、Word/PPT 中嵌入图片里的文字不在本次范围（需要 OCR）。
 - 旧版 `.doc/.xls/.ppt` 依赖 Harness profile 中启用的 `office-to-pdf`（桌面版默认随包提供）；若该服务不可用会给出明确错误。
@@ -213,7 +214,7 @@ generator: "provider/model"
                                              └── entries/<uuid>.md
 ```
 
-- **Host 半**（`index.js` + `lib/paths.js` + `lib/text.js`）：知识库存储（JSON 索引 + Markdown 文件、原子写）、工作区文档扫描（通过 Harness 组合文件系统）、LLM 提炼流水线（单篇直出 / 长文 map-reduce，字符预算 72k）、权限判断、RPC 路由、模型工具与系统提示词。零第三方运行时依赖。
+- **Host 半**（`index.js` + `lib/paths.js` + `lib/text.js`）：知识库存储（JSON 索引 + Markdown 文件、原子写）、工作区文档扫描（通过 Harness 组合文件系统）、LLM 提炼流水线（单篇直出 / 长文 map-reduce，字符预算 192k）、权限判断、RPC 路由、模型工具与系统提示词。零第三方运行时依赖。
 - **Client 半**（`client.js`）：一个浏览器 Cordis 插件，注册三个槽位——`sidebar.panellist`（左侧栏知识图标）、`main`（整页知识中心面板）与 `settings.section`（Settings 设置页）；自研 Markdown→React 渲染器；配色以 Harness 主题令牌为主（装饰性元素使用令牌回退）；通过 `ctx.connection.rpc.call` 调用 Host。
 - **提炼流水线**：读取文档 →（长文档）分片提炼要点 → 合并为结构化知识 Markdown → 写入 front matter + 索引；同一来源按（工作区, 相对路径）更新已有条目。
 - **工具注册**：`knowledge_search` / `knowledge_read` / `knowledge_ingest` 注册在 Harness Tool Registry，提示词章节说明能力与权限边界。
@@ -234,7 +235,7 @@ generator: "provider/model"
 
 - 提取为尽力而为：PDF 只提取文本层（扫描件需 OCR）；旧版 Office 需要 LibreOffice 服务；复杂版式（分栏、表格合并、图表）只保留文本顺序，不保留视觉布局。
 - 检索为本地关键词 + 摘要匹配，**没有向量嵌入**；适合数百篇规模，不适合大规模语义检索。
-- 提炼质量与速度取决于 Harness 中配置的默认模型；单篇超长文档只提炼前约 72k 字符，会在 front matter 中标记 `truncated: true`。
+- 提炼质量与速度取决于 Harness 中配置的默认模型；单篇超长文档只提炼前约 192k 字符，会在 front matter 中标记 `truncated: true`。
 - 本机共享存储使用跨进程锁保护索引读改写，可协调同机多个 profile；不支持多人协作 / 云同步 / 知识正文版本历史。仅对确认退出的本机持锁进程自动回收锁，无法验证时超时并报错。
 - Harness 0.2.1-rc.3 的 Settings 导航图标由内置 shell 硬编码，第三方 Settings 分区统一回退为齿轮；插件改用受支持的侧边栏知识图标作为主入口（见 FAQ）。
 - 尚未包含自动化 UI 视觉回归测试；Windows/Linux 的 UI 端到端验证待补。
@@ -343,7 +344,8 @@ The interaction model is inspired by Qoder CN's knowledge features:
 - **Distill workspace documents**
   - Scans workspace documents including Markdown, TXT, CSV, HTML, PDF, Word, Excel and PowerPoint (full list in the next section).
   - Uses the Harness default model to produce a structured knowledge note: title, summary, key points, details, when to use it, sources.
-  - Long documents are distilled in chunks and merged (up to 6 chunks, roughly 72k characters per document).
+  - Long documents are distilled in chunks and merged (up to 16 chunks, roughly 192k characters per document).
+- Self-healing distillation: when a note is truncated because reasoning tokens consumed the output budget, the call is retried with a larger budget and only then with a bounded reasoning effort, so `reasoningEffort: max` still produces a complete note without changing the agent's own effort.
   - Re-generating the same workspace-relative source **updates** the existing note instead of duplicating it.
 - **Knowledge library management**
   - Multiple knowledge bases with `user` or `workspace` scope; workspace-scoped libraries are only visible inside that workspace.
@@ -371,7 +373,7 @@ The interaction model is inspired by Qoder CN's knowledge features:
 
 Notes:
 
-- Text documents are capped at 1 MiB and binary documents at 25 MiB; extracted text is capped at 400k characters and then bounded by the distillation budget (12k × 6 ≈ 72k characters).
+- Text documents are capped at 10 MiB and binary documents at 25 MiB; extracted text is capped at 400k characters and then bounded by the distillation budget (12k × 16 ≈ 192k characters). Content beyond the budget is not sent to the model and is marked `truncated: true` in the front matter: a 10 MiB file is accepted and distilled from a representative part of the budget instead of being read end to end (which would need hundreds of model calls).
 - OOXML/PDF decompression is capped at 16 MiB per entry/stream and 64 MiB in total. Unused OOXML media is skipped. Conflicting font mappings in the PDF fallback produce a clear error; use pdftotext for those files.
 - PDF extraction reads the **text layer** only; scanned/image-only PDFs and text inside embedded images (Word/PPT) need OCR and are out of scope.
 - Legacy `.doc/.xls/.ppt` require the `office-to-pdf` service enabled in the Harness profile (shipped with Desktop); a clear error is returned when it is unavailable.
@@ -520,7 +522,7 @@ Browser (client.js)                          Host (index.js)
                                              └── entries/<uuid>.md
 ```
 
-- **Host half** (`index.js` + `lib/paths.js` + `lib/text.js`): library storage (JSON index + Markdown files, atomic writes), workspace document scanning through the composed Harness filesystem, LLM distillation (single-shot or map-reduce for long documents, 72k-character budget), permission checks, RPC route, agent tools and the system-prompt section. Zero third-party runtime dependencies.
+- **Host half** (`index.js` + `lib/paths.js` + `lib/text.js`): library storage (JSON index + Markdown files, atomic writes), workspace document scanning through the composed Harness filesystem, LLM distillation (single-shot or map-reduce for long documents, 192k-character budget), permission checks, RPC route, agent tools and the system-prompt section. Zero third-party runtime dependencies.
 - **Client half** (`client.js`): a browser Cordis plugin registering three slots — `sidebar.panellist` (sidebar knowledge icon), `main` (full-page Knowledge Center panel) and `settings.section` (Settings page); a self-contained Markdown-to-React renderer; theme-token-driven colors (with token fallbacks for decorative elements); Host calls through `ctx.connection.rpc.call`.
 - **Distillation pipeline**: read document → (for long documents) distill chunk notes → merge into one structured Markdown note → write front matter + index; re-ingesting the same (workspace, relative path) updates the existing entry.
 - **Tool registration**: `knowledge_search`, `knowledge_read`, `knowledge_ingest` register in the Harness Tool Registry; the prompt section explains the capability and permission boundary.
@@ -541,7 +543,7 @@ All platform-sensitive logic is centralized in `lib/paths.js` (`canonicalPath`, 
 
 - Extraction is best-effort: PDF reads the text layer only (scanned documents need OCR); legacy Office requires the LibreOffice service; complex layouts keep text order but not visual structure.
 - Retrieval is local keyword/summary matching with **no vector embeddings**; suitable for hundreds of notes, not for large-scale semantic search.
-- Distillation quality and speed depend on the configured default model; very long documents are distilled from roughly the first 72k characters and marked `truncated: true` in the front matter.
+- Distillation quality and speed depend on the configured default model; very long documents are distilled from roughly the first 192k characters and marked `truncated: true` in the front matter.
 - Local shared storage uses a cross-process lock for index updates across profiles on the same machine. No team collaboration, cloud sync or note-body revision history. Lock recovery requires a confirmed exited local owner; an unverifiable owner causes a timeout instead of stealing the lock.
 - Harness 0.2.1-rc.3 hardcodes Settings nav icons; third-party Settings sections fall back to a gear, so the plugin uses the supported sidebar knowledge icon as its primary entry (see FAQ).
 - No automated UI visual regression tests yet; Windows/Linux UI end-to-end verification is pending.
