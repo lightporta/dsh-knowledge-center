@@ -90,6 +90,14 @@ window.__ModuleLoader__.load({
       aboutText: '知识中心把工作区文档提炼为带元数据的 Markdown 知识文件，存放在本机数据目录中；Markdown 预览采用类 VS Code 的排版。',
       copyPath: '复制路径',
       permissionUpdated: '权限已更新',
+      shareTitle: '共享知识库',
+      shareHint: '共享库只对被勾选的工作区可见；勾选后该工作区的模型才能检索。写入仍发生在工作区库，共享与撤销只在这里由你操作。',
+      shareEmpty: '还没有共享知识库',
+      shareCreatePlaceholder: '新共享库名称',
+      shareCreate: '新建共享库',
+      shareCreated: '共享库已创建',
+      shareGranted: '已共享给该工作区',
+      shareRevoked: '已取消共享',
       errorPrefix: '操作失败：',
       noModel: '未检测到默认模型，请先在「设置 → 模型」中配置。',
       editHint: '编辑完整 Markdown 源码后保存；front matter 中的 title / summary / sources 会同步到索引。',
@@ -188,6 +196,14 @@ window.__ModuleLoader__.load({
       aboutText: 'Knowledge Center distills workspace documents into Markdown knowledge files with metadata under the local data directory; the preview is laid out like VS Code Markdown preview.',
       copyPath: 'Copy path',
       permissionUpdated: 'Access updated',
+      shareTitle: 'Shared knowledge bases',
+      shareHint: 'A shared library is visible only to the workspaces you tick here. Writes still happen in the workspace library; sharing and revocation are owner actions on this page.',
+      shareEmpty: 'No shared knowledge base yet',
+      shareCreatePlaceholder: 'New shared library name',
+      shareCreate: 'Create shared library',
+      shareCreated: 'Shared library created',
+      shareGranted: 'Shared with this workspace',
+      shareRevoked: 'Sharing revoked',
       errorPrefix: 'Failed: ',
       noModel: 'No default model detected. Configure one in Settings → Models.',
       editHint: 'Edit the complete Markdown source and save; title / summary / sources from the front matter are synced into the index.',
@@ -1357,6 +1373,64 @@ window.__ModuleLoader__.load({
       const [notice, setNotice] = useState(null)
       const [errorNotice, setErrorNotice] = useState(null)
       const [settingsNotice, setSettingsNotice] = useState(null)
+      const [shares, setShares] = useState(null)
+      const [shareError, setShareError] = useState(null)
+      const [shareNotice, setShareNotice] = useState(null)
+      const [shareName, setShareName] = useState('')
+      const [creatingShare, setCreatingShare] = useState(false)
+      const [pendingShare, setPendingShare] = useState(null)
+
+      const loadShares = async () => {
+        try {
+          setShareError(null)
+          setShares(await callRpc(ctx, 'listShares', {}))
+        } catch (failure) {
+          setShareError(errorMessage(failure))
+        }
+      }
+      useEffect(() => { loadShares() }, [])
+
+      const isShared = (collection, workspace) => (collection.readers ?? []).some(
+        (reader) => String(reader).toLowerCase() === String(workspace.path).toLowerCase(),
+      )
+
+      const toggleShare = async (collection, workspace) => {
+        const shared = isShared(collection, workspace)
+        setPendingShare(`${collection.id}:${workspace.path}`)
+        setShareNotice(null)
+        setShareError(null)
+        try {
+          await callRpc(ctx, 'setCollectionShare', {
+            collectionId: collection.id,
+            workspacePath: workspace.path,
+            allowed: !shared,
+          })
+          setShareNotice(shared ? tr(t, 'shareRevoked') : tr(t, 'shareGranted'))
+          await loadShares()
+          await reload()
+        } catch (failure) {
+          setShareError(errorMessage(failure))
+        } finally {
+          setPendingShare(null)
+        }
+      }
+
+      const createShared = async () => {
+        setCreatingShare(true)
+        setShareNotice(null)
+        setShareError(null)
+        try {
+          await callRpc(ctx, 'createCollection', { name: shareName.trim(), scope: 'shared' })
+          setShareName('')
+          setShareNotice(tr(t, 'shareCreated'))
+          await loadShares()
+          await reload()
+        } catch (failure) {
+          setShareError(errorMessage(failure))
+        } finally {
+          setCreatingShare(false)
+        }
+      }
 
       const toggle = async (workspace) => {
         setPendingPath(workspace.path)
@@ -1432,6 +1506,33 @@ window.__ModuleLoader__.load({
                   onClick: () => toggle(workspace),
                 }))))),
         h('div', { className: 'kc-card' },
+          h('div', { className: 'kc-row-between' },
+            h('div', null,
+              h('div', { style: { fontWeight: 600, fontSize: '13px' } }, tr(t, 'shareTitle')),
+              h('div', { className: 'kc-muted', style: { fontSize: '11px', lineHeight: '17px', maxWidth: '640px' } }, tr(t, 'shareHint'))),
+            h('span', { className: 'kc-badge' }, `${(shares?.collections ?? []).filter((collection) => collection.scope === 'shared').length}`)),
+          h(Notice, { kind: 'ok', text: shareNotice }),
+          h(Notice, { kind: 'error', text: shareError }),
+          (shares?.collections ?? []).filter((collection) => collection.scope === 'shared').length === 0
+            ? h(EmptyBox, null, tr(t, 'shareEmpty'))
+            : h('div', null, (shares?.collections ?? []).filter((collection) => collection.scope === 'shared').map((collection) => h('div', { key: collection.id, style: { padding: '8px 0' } },
+                h('div', { className: 'kc-row-between' },
+                  h('div', { style: { fontWeight: 600 } }, collection.name),
+                  h('span', { className: 'kc-muted', style: { fontSize: '11px' } }, `${(collection.readers ?? []).length} / ${workspaces.length}`)),
+                h('div', { className: 'kc-row', style: { flexWrap: 'wrap', gap: '6px', marginTop: '6px' } }, workspaces.map((workspace) => {
+                  const shared = isShared(collection, workspace)
+                  return h('button', {
+                    key: workspace.id,
+                    type: 'button',
+                    className: 'kc-btn kc-btn-small',
+                    'data-on': shared,
+                    disabled: pendingShare === `${collection.id}:${workspace.path}`,
+                    onClick: () => toggleShare(collection, workspace),
+                  }, `${workspace.title}${shared ? ' ✓' : ''}`)
+                }))))),
+          h('div', { className: 'kc-row', style: { marginTop: '10px' } },
+            h('input', { className: 'kc-input', placeholder: tr(t, 'shareCreatePlaceholder'), value: shareName, maxLength: 80, onChange: (event) => setShareName(event.target.value) }),
+            h('button', { type: 'button', className: 'kc-btn kc-btn-small', disabled: shareName.trim().length === 0 || creatingShare, onClick: createShared }, tr(t, 'shareCreate')))),        h('div', { className: 'kc-card' },
           h('div', { style: { fontWeight: 600, fontSize: '13px' } }, tr(t, 'stats')),
           h('dl', { className: 'kc-kv' },
             h('dt', null, tr(t, 'entryTotal', { count: data.totals.entries })),

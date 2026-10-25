@@ -45,6 +45,8 @@
 - **类 VS Code 的 Markdown 渲染**
   - 标题底边线、行内代码、代码块、引用、表格、任务列表、有序/无序列表、链接、分隔线等。
   - 容器、文字、边框、代码块等配色使用 Harness 主题令牌（`--dsw-alias-*`，个别装饰性元素如开关圆点/阴影使用中性色或令牌回退），自动适配明暗主题。
+- **库级共享**
+  - 共享库可在「权限与设置」中勾选可见的工作区；写入仍只发生在工作区库，共享与撤销只由 owner 操作，并留下 grant/revoke 审计。
 - **按工作区授权**
   - 默认**所有工作区均未授权**；模型工具在未授权工作区会明确拒绝。
   - 每个工作区单独开关「允许模型调用」。
@@ -193,6 +195,8 @@ generator: "provider/model"
 ### 权限与安全
 
 - **RPC 仅本机 owner**：Settings 页面通过 Harness 浏览器连接调用 `POST /knowledge-center/<method>`；Host 使用 Harness 的连接鉴权（浏览器 Cookie / owner Peer）校验，未认证请求返回 401，非 owner 返回 403。
+- **库级共享**
+  - 共享库可在「权限与设置」中勾选可见的工作区；写入仍只发生在工作区库，共享与撤销只由 owner 操作，并留下 grant/revoke 审计。
 - **按工作区授权**：默认全部关闭；模型工具只读取「用户作用域 + 当前工作区作用域」的知识。会话子目录归属最具体的已注册工作区，单独注册的嵌套工作区需独立授权，不继承父工作区的授权或专属知识库。
 - **数据不离开本机**：知识文件只写入 `$DSH_HOME`，插件不包含任何云同步、遥测或外部上传逻辑；提炼调用的是用户在 Harness 中配置的模型服务。
 - **不要把凭证、个人隐私、未授权共享的内容放进工作区文档或知识库**。知识文件以明文保存。
@@ -344,6 +348,8 @@ The interaction model is inspired by Qoder CN's knowledge features:
 - **VS Code-like Markdown rendering**
   - Heading underlines, inline code, fenced code, quotes, tables, task lists, ordered/unordered lists, links, horizontal rules.
   - Container, text, border and code colors come from Harness theme tokens (`--dsw-alias-*`, with token fallbacks for a few decorative elements such as the switch knob/shadow), so light and dark themes work automatically.
+- **Library-level sharing**
+  - A shared library can be granted to selected workspaces in Access & Settings; writes still happen in the workspace library, and sharing/revocation are owner-only with a grant/revoke audit.
 - **Per-workspace access control**
   - Every workspace is **denied by default**; model tools refuse to run without a grant.
   - One toggle per workspace ("Allow model access").

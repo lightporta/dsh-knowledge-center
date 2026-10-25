@@ -121,3 +121,8 @@ Results here describe local automated checks. They do not certify real-model cal
 - 索引 v3：`scope: shared` + `readers` + 追加式 `shares` 审计；可见性在 `accessibleCollectionIds` 单点判定。
 - owner RPC：创建共享库、授予/撤销、列审计；模型工具不可改可见性、不可写共享库。
 - 本地回归 118/118 通过；待实机 UI 入口与三平台 CI。
+
+### v1.6.0（C 阶段 UI）
+
+- Settings「权限与设置」新增共享库卡片（新建/勾选工作区/撤销），走 owner RPC；本地测试仍 118/118。
+- 未验证：浏览器内实际勾选流程（需刷新页面）与三平台 CI。

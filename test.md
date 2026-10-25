@@ -78,3 +78,8 @@ v1.2.0 发布前同一套件在 Windows（Node.js 22.23.4 与 24.16.0）下连�
 - owner-only RPC：`createCollection(scope:'shared')`、`setCollectionShare`、`listShares`；模型工具不能建共享库、不能改可见性，也不能写共享库。
 - 迁移：`INDEX_VERSION=3`；旧库首次读取原地升级并留副本与收据（沿用 v1.3 机制）。
 - 新增用例：A 建共享库并入库 → 授权 B → B 可检索/回读、C 不可见 → 撤销后 B 立即不可见 → 审计两条记录。
+
+### v1.6.0（C 阶段 UI）
+
+- 「权限与设置」新增「共享知识库」卡片：新建共享库、按工作区勾选/取消、显示已共享数量；调用 `createCollection(scope:shared)`、`setCollectionShare`、`listShares`。
+- 共享与撤销均为 owner 操作；模型工具仍不能改可见性、不能写共享库。
