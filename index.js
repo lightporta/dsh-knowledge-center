@@ -424,6 +424,18 @@ function modelLabel(ctx) {
   return `${selection.provider}/${selection.model}`
 }
 
+/**
+ * Distillation shares one max_tokens budget between the reasoning tokens and
+ * the note itself. The top reasoning effort can spend that budget before the
+ * note is finished (finish reason "max-tokens") even for a normal document,
+ * so background distillation is bounded to "high"; the agent keeps whatever
+ * effort the user configured.
+ */
+function distillationSelection(selection) {
+  if (selection?.reasoningEffort !== 'max') return selection
+  return { ...selection, reasoningEffort: 'high' }
+}
+
 async function generateText(ctx, { system, prompt, signal, selection = pickModel(ctx) }) {
   const llm = ctx.get('llm')
   if (llm === undefined || llm === null) {
@@ -434,7 +446,7 @@ async function generateText(ctx, { system, prompt, signal, selection = pickModel
   }
   const timeout = AbortSignal.timeout(KNOWLEDGE_TIMEOUT_MS)
   const combined = signal === undefined ? timeout : AbortSignal.any([signal, timeout])
-  const call = await llm.prepareCall({ ...selection, maxTokens: KNOWLEDGE_MAX_TOKENS }, combined)
+  const call = await llm.prepareCall({ ...distillationSelection(selection), maxTokens: KNOWLEDGE_MAX_TOKENS }, combined)
   const options = {
     ...call.config,
     messages: [{ role: 'user', content: [{ type: 'text', text: prompt }] }],
