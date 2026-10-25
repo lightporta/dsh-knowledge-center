@@ -101,6 +101,7 @@ window.__ModuleLoader__.load({
       moveTo: '移动到…',
       move: '移动',
       entryMoved: '条目已移动',
+      moveWhileEditing: '先保存或取消编辑，再移动条目',
       errorPrefix: '操作失败：',
       noModel: '未检测到默认模型，请先在「设置 → 模型」中配置。',
       editHint: '编辑完整 Markdown 源码后保存；front matter 中的 title / summary / sources 会同步到索引。',
@@ -210,6 +211,7 @@ window.__ModuleLoader__.load({
       moveTo: 'Move to…',
       move: 'Move',
       entryMoved: 'Note moved',
+      moveWhileEditing: 'Save or discard the edit before moving the note',
       errorPrefix: 'Failed: ',
       noModel: 'No default model detected. Configure one in Settings → Models.',
       editHint: 'Edit the complete Markdown source and save; title / summary / sources from the front matter are synced into the index.',
@@ -1029,16 +1031,17 @@ window.__ModuleLoader__.load({
                 className: 'kc-input',
                 'aria-label': tr(t, 'moveTo'),
                 value: moveTarget,
-                disabled: busy || !detailReady,
+                disabled: busy || !detailReady || editing,
+                title: editing ? tr(t, 'moveWhileEditing') : undefined,
                 onChange: (event) => setMoveTarget(event.target.value),
               },
                 h('option', { value: '' }, tr(t, 'moveTo')),
                 (data?.collections ?? []).filter((collection) => collection.id !== detail?.meta?.collectionId)
                   .map((collection) => h('option', { key: collection.id, value: collection.id }, collection.name))),
-              h('button', { type: 'button', className: 'kc-btn kc-btn-small', disabled: moveTarget === '' || busy || !detailReady || editing, onClick: () => moveEntryTo(moveTarget) }, tr(t, 'move')),
+              h('button', { type: 'button', className: 'kc-btn kc-btn-small', disabled: moveTarget === '' || busy || !detailReady || editing, title: editing ? tr(t, 'moveWhileEditing') : undefined, onClick: () => moveEntryTo(moveTarget) }, tr(t, 'move')),
               editing
                 ? h('button', { type: 'button', className: 'kc-btn kc-btn-small kc-btn-primary', disabled: busy, onClick: saveEntry }, tr(t, 'save'))
-                : h('button', { type: 'button', className: 'kc-btn kc-btn-small', disabled: !detailReady, onClick: () => { if (!isCurrentDetail()) return; setEditing(true); setViewMode('source'); setDraft(detail.source) } }, tr(t, 'edit')),
+                : h('button', { type: 'button', className: 'kc-btn kc-btn-small', disabled: !detailReady, onClick: () => { if (!isCurrentDetail()) return; setEditing(true); setViewMode('source'); setDraft(detail.source); setMoveTarget('') } }, tr(t, 'edit')),
               pendingDelete === detailId
                 ? h('span', { className: 'kc-row' },
                     h('span', { className: 'kc-warn' }, tr(t, 'deleteEntryTitle')),
