@@ -1013,10 +1013,10 @@ function attachmentHostPath(ref, root) {
  * Read one attachment and reduce it to text with the same extractors used for
  * workspace files. The resolved path must stay inside the attachment store.
  */
-async function readAttachmentSource(ctx, ref, { signal, resolveExecutable, attachmentsRoot } = {}) {
+async function readAttachmentSource(ctx, ref, { signal, resolveExecutable, attachmentsRoot, path } = {}) {
   const service = ctx.get('attachments')
-  let hostPath
-  if (service !== undefined && service !== null && typeof service.fileHostPath === 'function') {
+  let hostPath = typeof path === 'string' && path.length > 0 ? path : undefined
+  if (hostPath === undefined && service !== undefined && service !== null && typeof service.fileHostPath === 'function') {
     try {
       hostPath = service.fileHostPath(ref)
     } catch {
@@ -1278,7 +1278,8 @@ const ATTACHMENT_INGEST_PARAMETERS = {
   type: 'object',
   additionalProperties: false,
   properties: {
-    name: { type: 'string', description: 'Attachment file name to distill. Omit to distill every file attached to this conversation.' },
+    path: { type: 'string', description: 'Absolute path of the saved attachment shown in the attachment prompt. Preferred over name.' },
+    name: { type: 'string', description: 'Attachment file name to distill when the path is unknown. Omit to distill every file attached to this conversation.' },
     collectionId: { type: 'string', description: 'Target knowledge base id. Defaults to the current workspace library.' },
     language: { type: 'string', enum: ['zh', 'en'] },
   },
@@ -1836,6 +1837,7 @@ export function apply(ctx) {
     name: 'knowledge_ingest_attachment',
     description:
       'Distill files the user attached to this conversation into the current workspace knowledge base. '
+      + 'Pass the saved attachment path from the attachment prompt as `path`, or a file name as `name` to match the current session. '
       + 'Only use this when the user explicitly asks to turn an attachment into knowledge. '
       + 'It writes to the current workspace library; global or shared libraries stay owner-only.',
     parameters: ATTACHMENT_INGEST_PARAMETERS,
@@ -1857,19 +1859,22 @@ export function apply(ctx) {
       if (workspace === undefined) throw new Error(`The current directory is not a registered workspace: ${cwd}`)
       const language = knowledgeLanguage(index, input.language === 'en' || input.language === 'zh' ? input.language : undefined)
       const collection = await resolveCollectionForIngest(store, workspace, asOptionalString(input.collectionId), 'tool')
+      const explicitPath = asOptionalString(input.path)
       const wanted = asOptionalString(input.name)
-      const refs = sessionFileAttachments(ctx, exec.agent?.id)
-      const selected = wanted === undefined ? refs : refs.filter((ref) => ref.name === wanted)
+      const refs = explicitPath === undefined ? sessionFileAttachments(ctx, exec.agent?.id) : []
+      const selected = explicitPath !== undefined
+        ? [{ name: basename(explicitPath), path: explicitPath }]
+        : wanted === undefined ? refs : refs.filter((ref) => ref.name === wanted)
       if (selected.length === 0) {
         throw new Error(wanted === undefined
-          ? 'No file attachments were found in this conversation.'
-          : `No attachment named ${wanted} was found in this conversation.`)
+          ? 'No file attachments were found in this conversation. Pass the saved attachment path as `path`.'
+          : `No attachment named ${wanted} was found. Pass the saved attachment path as \`path\` instead.`)
       }
       const entries = []
       const failed = []
       for (const ref of selected.slice(0, 3)) {
         try {
-          const source = await readAttachmentSource(ctx, ref, { signal: exec.signal, resolveExecutable: createExecutableResolver(ctx), attachmentsRoot: join(dirname(store.root), 'attachments') })
+          const source = await readAttachmentSource(ctx, ref, { signal: exec.signal, resolveExecutable: createExecutableResolver(ctx), attachmentsRoot: join(dirname(store.root), 'attachments'), path: ref.path })
           const result = await ingestDocument(ctx, store, {
             workspace,
             collection,

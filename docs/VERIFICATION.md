@@ -110,3 +110,8 @@ Results here describe local automated checks. They do not certify real-model cal
 - 新增 `knowledge_ingest_attachment`：从当前会话 file 块收集内容寻址附件，校验附件根目录后按扩展名提取（文本 / PDF / OOXML），复用提炼管线写入当前工作区库；来源记为 `附件/<name>`。
 - 本地回归 117/117 连续 2 轮通过（Windows，Node.js 24.16.0）；`npm run check` 通过。
 - 未验证：真实宿主重启后的附件端到端（docx / PDF）、10MB 附件、三平台 CI。
+
+### v1.4.1 修正
+
+- 会话事件不暴露附件引用，`knowledge_ingest_attachment` 改为接受显式 `path`（附件提示里的已保存路径），并继续强制 realpath 落在 `$DSH_HOME/attachments` 内；按名称枚举仅作为兼容路径。
+- 本地回归 117/117 通过；等待宿主重启后做实机附件端到端。
