@@ -66,6 +66,7 @@
 说明：
 
 - 文本文件上限 10 MiB，二进制文档上限 25 MiB；提取文本上限 40 万字符，随后仍受提炼预算（12k × 16 ≈ 192k 字符）约束。超出提炼预算的部分不送模型，并在 front matter 中标记 `truncated: true`：10 MiB 级文件可以被接受并提炼预算内的开头部分，而不是整篇逐段精读（那需要数百次模型调用）。
+- 各格式提取所需的前置工具与硬性上限见 [docs/EXTRACTION.md](docs/EXTRACTION.md)。
 - OOXML/PDF 解压预算为单项 16 MiB、累计 64 MiB；OOXML 忽略未使用的媒体资源。PDF 回退遇到冲突字体映射会明确报错，请使用 pdftotext。
 - PDF 只提取**文本层**；扫描件/纯图片 PDF、Word/PPT 中嵌入图片里的文字不在本次范围（需要 OCR）。
 - 旧版 `.doc/.xls/.ppt` 依赖 Harness profile 中启用的 `office-to-pdf`（桌面版默认随包提供）；若该服务不可用会给出明确错误。
@@ -364,6 +365,7 @@ The interaction model is inspired by Qoder CN's knowledge features:
 Notes:
 
 - Text documents are capped at 10 MiB and binary documents at 25 MiB; extracted text is capped at 400k characters and then bounded by the distillation budget (12k × 16 ≈ 192k characters). Content beyond the budget is not sent to the model and is marked `truncated: true` in the front matter: a 10 MiB file is accepted and distilled from the first part of the budget instead of being read end to end (which would need hundreds of model calls).
+- Per-format extractor prerequisites and hard limits are listed in [docs/EXTRACTION.md](docs/EXTRACTION.md).
 - OOXML/PDF decompression is capped at 16 MiB per entry/stream and 64 MiB in total. Unused OOXML media is skipped. Conflicting font mappings in the PDF fallback produce a clear error; use pdftotext for those files.
 - PDF extraction reads the **text layer** only; scanned/image-only PDFs and text inside embedded images (Word/PPT) need OCR and are out of scope.
 - Legacy `.doc/.xls/.ppt` require the `office-to-pdf` service enabled in the Harness profile (shipped with Desktop); a clear error is returned when it is unavailable.
