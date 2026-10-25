@@ -14,7 +14,7 @@
  */
 import { promises as fsp } from 'node:fs'
 import { join, basename, dirname, extname } from 'node:path'
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import {
   canonicalPath,
   comparisonKey,
@@ -65,6 +65,7 @@ const MAX_SCAN_DEPTH = 6
 const MAX_SCAN_FILES = 400
 const MAX_CHUNK_CHARS = 12_000
 const MAX_CHUNKS = 16
+const MAX_MERGE_CHARS = 60_000
 const KNOWLEDGE_TIMEOUT_MS = 300_000
 // One structured note plus the reasoning tokens a model spends inside the same
 // max_tokens budget. A top-effort model can still exhaust one budget, so a
@@ -340,11 +341,18 @@ class KnowledgeStore {
       // An older backup may predate a permission revocation. Never restore its
       // grants; preserving notes does not authorize the model to access them.
       recovered.permissions = {}
+      // A backup may predate a share revocation. Never restore shared readers
+      // or the audit trail from an older backup.
+      for (const collection of recovered.collections) {
+        if (collection.scope === 'shared') collection.readers = []
+      }
+      recovered.shares = []
       recovered.recovery = {
         recoveredAt: Date.now(),
         source: 'backup',
         reason: primary.kind === 'missing' ? 'missing-primary' : 'invalid-primary',
         permissionsReset: true,
+        readersReset: true,
       }
       if (primary.kind === 'invalid') {
         const corrupt = `${this.indexPath}.corrupt-${Date.now()}-${randomUUID()}`
@@ -650,7 +658,7 @@ async function distillDocument(ctx, { text, relPath, language, signal }) {
   const selection = pickModel(ctx)
   const cleaned = stripFrontmatter(text)
   const title = deriveTitle(cleaned, relPath)
-  const { chunks, truncated } = chunkText(cleaned, MAX_CHUNK_CHARS, MAX_CHUNKS)
+  let { chunks, truncated } = chunkText(cleaned, MAX_CHUNK_CHARS, MAX_CHUNKS)
   let result
   if (chunks.length === 1) {
     result = await generateText(ctx, {
@@ -673,7 +681,7 @@ async function distillDocument(ctx, { text, relPath, language, signal }) {
     }
     result = await generateText(ctx, {
       system: curatorSystem(language),
-      prompt: mergePrompt({ language, title, relPath, notes }),
+      prompt: mergePrompt({ language, title, relPath, notes: cappedMergeNotes(notes, () => { truncated = true }) }),
       signal,
       selection,
     })
@@ -891,7 +899,7 @@ function accessibleCollectionIds(index, cwd) {
     if (collection.scope === 'user') ids.add(collection.id)
     else if (collection.scope === 'workspace' && comparisonKey(collection.workspacePath) === target) {
       ids.add(collection.id)
-    } else if (collection.scope === 'shared' && Array.isArray(collection.readers) && collection.readers.some((reader) => comparisonKey(reader) === target || isSameOrInside(canonicalPath(reader), cwd))) {
+    } else if (collection.scope === 'shared' && Array.isArray(collection.readers) && collection.readers.some((reader) => comparisonKey(reader) === target)) {
       ids.add(collection.id)
     }
   }
@@ -1038,15 +1046,24 @@ async function readAttachmentSource(ctx, ref, { signal, resolveExecutable, attac
   const limit = TEXT_EXTENSIONS.has(extension) ? MAX_TEXT_BYTES : MAX_BINARY_BYTES
   if (info.size > limit) throw new Error(`Attachment is larger than ${Math.round(limit / (1024 * 1024))} MiB: ${ref.name}`)
   const bytes = await fsp.readFile(real)
+  const digest = createHash('sha256').update(bytes).digest('hex')
   if (TEXT_EXTENSIONS.has(extension)) {
     const raw = bytes.toString('utf8')
-    return { text: extension === '.html' || extension === '.htm' ? extractHtmlText(raw) : raw }
+    return { text: extension === '.html' || extension === '.htm' ? extractHtmlText(raw) : raw, digest }
   }
-  if (PDF_EXTENSIONS.has(extension)) return { text: await extractPdfText(bytes, { signal, resolveExecutable }) }
+  if (PDF_EXTENSIONS.has(extension)) return { text: await extractPdfText(bytes, { signal, resolveExecutable }), digest }
   if (LEGACY_OFFICE_EXTENSIONS.has(extension)) {
     throw new Error(`Legacy Office attachments need the office-to-PDF service: ${ref.name}`)
   }
-  return { text: extractStructuredDocumentText({ extension, bytes }) }
+  return { text: extractStructuredDocumentText({ extension, bytes }), digest }
+}
+
+/** Bound the merge prompt: chunk notes are model output and can be long. */
+function cappedMergeNotes(notes, onTrim) {
+  const joined = notes.join('\n\n---\n\n')
+  if (joined.length <= MAX_MERGE_CHARS) return notes
+  onTrim()
+  return [joined.slice(0, MAX_MERGE_CHARS)]
 }
 
 async function ingestDocument(ctx, store, { workspace, collection, relativePath, language, signal, text: preExtracted }) {
@@ -1455,7 +1472,7 @@ function createApi(ctx, store) {
         dataDir: store.root,
         storageRecovery: index.recovery ?? null,
         model: modelLabel(ctx),
-        tools: ['knowledge_search', 'knowledge_read', 'knowledge_ingest'],
+        tools: ['knowledge_search', 'knowledge_read', 'knowledge_ingest', 'knowledge_ingest_attachment'],
         settings: index.settings,
         collections: index.collections.map((collection) => ({
           id: collection.id,
@@ -1594,7 +1611,7 @@ function createApi(ctx, store) {
       const collectionId = asString(data.collectionId, 'collectionId')
       const workspace = await requireWorkspace(ctx, asString(data.workspacePath, 'workspacePath'))
       const workspacePath = canonicalPath(workspace.path)
-      const allowed = data.allowed !== false
+      const allowed = data.allowed === true
       const now = Date.now()
       return store.mutate((index) => {
         const collection = index.collections.find((candidate) => candidate.id === collectionId)
@@ -1642,15 +1659,42 @@ function createApi(ctx, store) {
       const id = asString(data.id, 'id')
       const collectionId = asString(data.collectionId, 'collectionId')
       const now = Date.now()
-      return store.mutate((index) => {
+      const moved = await store.mutate((index) => {
         const entry = index.entries.find((candidate) => candidate.id === id)
         if (entry === undefined) throw new Error(`Knowledge note not found: ${id}`)
         const collection = index.collections.find((candidate) => candidate.id === collectionId)
         if (collection === undefined) throw new Error(`Unknown knowledge base: ${collectionId}`)
+        if (collection.id === entry.collectionId) throw new Error('The note already belongs to that knowledge base.')
+        const duplicate = index.entries.find((candidate) =>
+          candidate.id !== entry.id
+          && candidate.collectionId === collection.id
+          && comparisonKey(candidate.workspacePath ?? '') === comparisonKey(entry.workspacePath ?? '')
+          && Array.isArray(candidate.sources) && candidate.sources.length === 1
+          && Array.isArray(entry.sources) && entry.sources.length === 1
+          && sourceKey(candidate.sources[0]) === sourceKey(entry.sources[0]))
+        if (duplicate !== undefined) {
+          throw new Error(`The target knowledge base already holds a note for this source (${entry.sources[0]}).`)
+        }
         entry.collectionId = collection.id
         entry.updatedAt = now
-        return entryMetadata(index, entry)
+        return { entry, collection }
       })
+      // The Markdown copy is a shared artifact; keep its front matter aligned with the index.
+      try {
+        const file = await store.readEntryFile(id)
+        const parsed = parseFrontmatter(file)
+        const frontmatter = {
+          ...parsed.meta,
+          collectionId: moved.collection.id,
+          collection: moved.collection.name,
+          updatedAt: now,
+        }
+        await store.writeEntryFile(id, `${serializeFrontmatter(frontmatter)}\n\n${parsed.body}`)
+      } catch (error) {
+        if (error?.code !== 'ENOENT') throw error
+      }
+      const index = await store.readIndex()
+      return entryMetadata(index, index.entries.find((candidate) => candidate.id === id) ?? moved.entry)
     },
     async deleteEntry(payload) {
       const data = asRecord(payload)
@@ -1949,7 +1993,7 @@ export function apply(ctx) {
             collection,
             language,
             signal: exec.signal,
-            relativePath: `附件/${ref.name}`,
+            relativePath: `附件/${source.digest.slice(0, 12)}-${ref.name}`,
             text: source.text,
           })
           entries.push(result.entry)

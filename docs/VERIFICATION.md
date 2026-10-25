@@ -136,3 +136,9 @@ Results here describe local automated checks. They do not certify real-model cal
 
 - 修复共享库不可写：客户端目标库放行 `scope:shared`；新增 owner RPC `moveEntry` 与条目详情「移动到…」。
 - 本地回归 119/119（新增移动用例）。
+
+## v1.8.0（push 前 hardening）
+
+- 测试回仓并在 CI 三平台执行；`test.md` 脱敏，`scripts/check.mjs` 扫描本地绝对路径。
+- 修复：备份恢复清空共享授权、共享可见性精确匹配、移动查重与 front matter 同步、merge 输入上限、附件内容寻址来源、共享默认失败关闭、工具清单补全。
+- 本地回归 122/122（Windows，Node.js 24.16.0）；`npm run check` 通过。

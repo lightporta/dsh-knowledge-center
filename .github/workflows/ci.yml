@@ -29,3 +29,6 @@ jobs:
         shell: bash
         run: |
           node -e "for (const file of ['package.json', 'locale/en.json', 'locale/zh.json']) { JSON.parse(require('node:fs').readFileSync(file, 'utf8')) } console.log('JSON OK')"
+
+      - name: Run tests
+        run: npm test

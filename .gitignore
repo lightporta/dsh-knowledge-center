@@ -31,5 +31,3 @@ coverage/
 # Local review snapshots and one-off validation artifacts (not for publishing)
 .local-archive/
 
-# Local-only test assets; results and coverage live in test.md
-/test/

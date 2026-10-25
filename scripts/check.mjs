@@ -67,3 +67,14 @@ for (const required of ['index.js', 'lib/*.js', 'client.js', 'cordis.patch.yml',
   if (!shipped.includes(required)) fail(`files is missing ${required}`)
 }
 console.log(`Manifest OK ${manifest.name}@${manifest.version}`)
+
+// The published repository must not leak a contributor's machine paths.
+const leakScan = async (name) => {
+  if (!(await exists(name))) return
+  const text = await readFile(join(root, name), 'utf8')
+  if (/[A-Za-z]:\\\\Users\\\\/i.test(text) || /[D-Z]:\\\\/i.test(text) || /\/Users\/[A-Za-z0-9._-]+\//.test(text) || /\/home\/[A-Za-z0-9._-]+\//.test(text)) {
+    fail(`${name} contains a local absolute path`)
+  }
+}
+for (const name of ['README.md', 'test.md', 'docs/VERIFICATION.md', 'docs/EXTRACTION.md', 'docs/fixes-2026-10-25.md']) await leakScan(name)
+console.log('Path scan OK')

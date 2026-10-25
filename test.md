@@ -15,24 +15,24 @@ $files = Get-ChildItem test -Filter '*.test.mjs' | ForEach-Object { $_.FullName 
 node --test $files
 ```
 
-## 当前用例（119 项）
+## 当前用例（122 项）
 
 | 文件 | 覆盖 | 用例数 |
 | --- | --- | --- |
 | `test/client-behavior.test.mjs` | 详情串页误删、旧响应与错误、编辑草稿、扫描与搜索竞态、共享刷新、恢复提示、键盘操作 | 21 |
 | `test/extract.test.mjs` | DOCX/XLSX/PPTX/HTML/PDF 提取、解压预算、取消传播 | 27 |
-| `test/host.test.mjs` | RPC、授权、生成、检索、预算阶梯与 max 兜底、截断回执、版本门/迁移、S1 收口、会话附件提炼、库级共享与撤销、**v1.7 共享库写入与移动** | 23 |
+| `test/host.test.mjs` | RPC、授权、生成、检索、预算阶梯与 max 兜底、截断回执、版本门/迁移、S1 收口、会话附件提炼、库级共享与撤销、共享库写入与移动、**v1.8 嵌套不继承/移动查重** | 25 |
 | `test/lock.test.mjs` | 同进程与真实子进程互斥、锁释放、崩溃回收、Windows 注入回归 | 15 |
 | `test/manifest.test.mjs` | 包入口、发布文件、bundle、locale、许可证一致性 | 6 |
 | `test/paths.test.mjs` | win32/darwin/POSIX 路径规则、工作区边界、来源身份 | 11 |
-| `test/store-recovery.test.mjs` | 备份、损坏/缺失索引恢复、重新授权、I/O 失败、防止静默清空 | 10 |
+| `test/store-recovery.test.mjs` | 备份、损坏/缺失索引恢复、重新授权、I/O 失败、防止静默清空、**v1.8 恢复时清空共享授权** | 11 |
 | `test/text.test.mjs` | 分片覆盖、字符预算、边界输入 | 6 |
 
 ## 最近结果
 
 | 日期 | 环境 | 轮次 | 结果 |
 | --- | --- | --- | --- |
-| 2026-10-25 | Windows 11，Node.js 24.16.0 | 1 | 119/119 通过，0 失败/跳过/取消 |
+| 2026-10-25 | Windows 11，Node.js 24.16.0 | 1 | 122/122 通过，0 失败/跳过/取消 |
 
 v1.2.0 发布前同一套件在 Windows（Node.js 22.23.4 与 24.16.0）下连续 3 轮 113/113；v1.3.0 新增 3 项版本门与 S1 用例后为 116 项。
 
@@ -87,7 +87,7 @@ v1.2.0 发布前同一套件在 Windows（Node.js 22.23.4 与 24.16.0）下连�
 ## 真实宿主共享验收（v1.6.0，2026-10-25）
 
 - 「权限与设置」出现「共享知识库」卡片；实测新建 `testshared`（scope=shared）并勾选两个工作区。
-- `index.json`：readers = `D:\dsh-knowledge-center`、`D:\Edgefile\Photo_storage`；`permissions` 两者均为 true。
+- `index.json`：readers = `<workspace-A>`、`<workspace-B>`；`permissions` 两者均为 true。
 - 审计：4 条记录（grant Photo_storage → grant dsh-knowledge-center → revoke Photo_storage → grant Photo_storage），actor=owner。
 - 未执行：浏览器内跨工作区检索断言（需要以 Photo_storage 为工作区开一个会话）；三平台 CI。
 
@@ -100,3 +100,15 @@ v1.2.0 发布前同一套件在 Windows（Node.js 22.23.4 与 24.16.0）下连�
 ### v1.7.1（编辑态互斥）
 
 - 编辑中的笔记禁用「移动到…」下拉与按钮，悬停提示“先保存或取消编辑，再移动条目”；进入编辑时清空已选目标，避免“选了目标但按钮禁用、误以为已移动”的体验。
+
+## v1.8.0（push 前 hardening）
+
+- 测试回仓：`test/` 不再 gitignore，`npm test` 与 CI 恢复执行（三平台）。
+- A2：备份恢复时清空所有 shared readers 与 shares，并写 `recovery.readersReset`（撤销不会被旧备份复活）。
+- A3：共享可见性改为精确匹配，嵌套注册工作区不再继承父工作区的共享库。
+- A4：`moveEntry` 拒绝目标库同源重复、同步重写笔记 front matter；客户端在打开/关闭详情时清空待移动目标并加 `isCurrentDetail` 守卫。
+- B1：merge 输入上限 60k 字符，超出截断并标记 `truncated`。
+- B2：附件来源改为内容寻址 `附件/<sha256前12>-<name>`，同名不同内容不再互相覆盖。
+- B4：`setCollectionShare` 缺 `allowed` 时默认失败关闭。
+- B6：`state().tools` 上报 4 个工具。
+- A1：README/test.md/docs 已脱敏；`scripts/check.mjs` 增加本地绝对路径扫描。

@@ -281,7 +281,7 @@ npm run check     # 语法检查合集
 
 ### 测试与验证
 
-测试是**本地资产**：`test/` 已在 `.gitignore` 中忽略，用例清单、运行方式与最近结果统一记录在 [test.md](test.md)；CI 执行 `npm run check`（语法 + 包清单/本地化校验）。发布前可用 `npm pack --dry-run` 核对文件清单。
+测试随仓库发布：`npm test` 运行 `test/*.test.mjs`，CI 三平台同样执行；用例清单、运行方式与最近结果统一记录在 [test.md](test.md)。`npm run check` 负责语法、包清单/本地化与本地绝对路径扫描。发布前可用 `npm pack --dry-run` 核对文件清单。
 
 测试方法、结果、已归档项目与尚未验证的范围统一记录在 [验证记录](docs/VERIFICATION.md)。
 
@@ -582,7 +582,7 @@ Development notes:
 
 ### Testing and verification
 
-Tests are **local assets**: `test/` is git-ignored, and the inventory, how to run it and the latest results live in [test.md](test.md). CI runs `npm run check` (syntax, manifest and locale checks). Use `npm pack --dry-run` to inspect the release inventory.
+Tests ship with the repository: `npm test` runs `test/*.test.mjs` and CI executes it on all three platforms; the inventory, how to run it and the latest results live in [test.md](test.md). `npm run check` validates syntax, manifest/locales and scans for local absolute paths. Use `npm pack --dry-run` to inspect the release inventory.
 
 Methods, results, archived checks and verification limits are recorded in the [verification log](docs/VERIFICATION.md).
 
