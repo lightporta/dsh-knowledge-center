@@ -4,7 +4,8 @@
 
 ## 验证环境与方法
 
-- 本机 macOS，Node.js 24.16.0。插件要求 Node.js 20.3.0 及以上。
+- 上一轮（macOS 基线）：本机 macOS，Node.js 24.16.0。插件要求 Node.js 20.3.0 及以上。
+- 本轮（Windows 锁修复）：本机 Windows 11（NT 10.0.26300，26H2），Node.js 24.16.0；另用与 CI 相同的 Node.js 22.23.4 复跑核心回归测试。
 - `npm test`：执行 `test/*.test.mjs`，不把辅助模块计作测试。Host 测试使用独立临时数据目录；结束后清理，不读取或写入实际知识库。
 - UI 行为测试使用持久 hooks 与 RPC 模拟环境，执行实际客户端组件的事件处理函数，验证请求乱序、操作对象、草稿和搜索状态；这不等同于浏览器视觉或真实 Harness 端到端测试。
 - 并发锁测试启动真实 Node 子进程，验证多个写入者互斥、进程退出后的锁回收，以及活跃锁不被强行夺取。
@@ -13,7 +14,7 @@
 - `npm pack --dry-run --json --ignore-scripts`：检查发布包的运行时依赖和文件清单。
 - `git diff --check`：检查补丁格式。另检查 Git 可见文件中的本机绝对路径、临时输出及常见凭证格式。
 
-## 本轮结果
+## 本轮结果（macOS 基线轮次）
 
 | 检查 | 本机结果 |
 | --- | --- |
@@ -24,7 +25,25 @@
 | Git 忽略规则 | 本地归档已命中 `.gitignore`，不会被普通 `git add .` 加入 |
 | Git 可见文件检查 | 30 个候选文件未检出机器绝对路径或常见凭证格式；8 处仓库相对链接有效 |
 
-清理前的 106 项通过记录包含现已归档的 4 项接线测试；当前可重复运行的核心测试为 102 项。原始测试输出、语法检查输出及打包清单保存在被忽略的本地归档中，不作为仓库发布内容。
+清理前的 106 项通过记录包含现已归档的 4 项接线测试；上一轮可重复运行的核心测试为 102 项，加入 Windows 锁回归后为 110 项。原始测试输出、语法检查输出及打包清单保存在被忽略的本地归档中，不作为仓库发布内容。
+
+## Windows 锁修复复验
+
+CI 在 Windows 上曾有 3 项 `test/lock.test.mjs` 失败：同进程并发竞争、真实子进程并发写入、持锁子进程退出后的锁回收。日志为候选目录 `rename` 与锁目录 `rmdir` 的 `EPERM`。
+
+| 检查 | Windows 本机结果 |
+| --- | --- |
+| 基线复现 | 用 `e348e68` 的 `lib/lock.js` 跑同一测试文件，复现 `EPERM: operation not permitted, rename ...index.lock`，与 CI 日志一致 |
+| 核心回归测试（Node.js 24.16.0） | 110/110 通过，0 失败、跳过或取消 |
+| 核心回归测试（Node.js 22.23.4，与 CI 相同） | 110/110 通过，0 失败、跳过或取消 |
+| 锁测试稳定性 | Node.js 22.23.4 下连跑 5 次均 15/15；Node.js 24.16.0 下连跑 3 次均 15/15 |
+| JS/MJS 语法检查 | 18 个文件通过 |
+| 补丁格式检查 | `git diff --check` 通过 |
+| 发布包清单 | 14 个文件，与上一轮一致 |
+
+修复内容见 [修复记录](fixes-2026-10-25.md) 的 Windows 文件锁一节。新增 8 项回归测试使用真实临时目录与真实 owner 文件，只在 `rename`、`rmdir`、`rm` 与 `process.kill` 处注入 Windows 访问错误，并检查实际目录、owner 身份、临界区进入次数、返回值与错误原因。
+
+这些结果来自本机 Windows，不代表 GitHub Actions 新提交后的 CI 已通过；推送后仍需确认 macOS、Ubuntu、Windows 三个 job。
 
 ## 保留的核心回归测试
 
@@ -33,7 +52,7 @@
 | `test/client-behavior.test.mjs` | 详情串页误删、旧响应与错误、编辑草稿、扫描与搜索竞态、共享刷新、恢复提示及键盘操作 |
 | `test/host.test.mjs` | 正常请求与取消、工具输出时间、工作区隔离、来源去重、并发更新、删库竞态、完整输出及统一检索 |
 | `test/store-recovery.test.mjs` | 备份、损坏/缺失索引恢复、重新授权、I/O 失败及防止静默清空 |
-| `test/lock.test.mjs` | 同进程与真实子进程协调、锁释放、崩溃回收、超时与取消 |
+| `test/lock.test.mjs` | 同进程与真实子进程协调、锁释放、崩溃回收、超时与取消；8 项注入 Windows 访问错误的故障回归 |
 | `test/extract.test.mjs` | DOCX/XLSX/PPTX/HTML/PDF 提取与资源预算 |
 | `test/paths.test.mjs` | 跨平台路径、工作区边界及来源身份 |
 | `test/text.test.mjs` | 分片、字符预算与截断边界 |
@@ -54,7 +73,7 @@
 
 - 本轮没有调用真实模型，没有重启 Harness，也没有写入生产知识数据。
 - 尚未验证修复后的 Harness GUI 全流程、实际浏览器排版和视觉回归。
-- Windows/Linux 的 CI 已配置，但没有将本机结果当作这两个平台的实际通过结果；最低 Node.js 版本也未在本机单独运行。
+- Windows/Linux 的 CI 已配置。本轮只在 Windows 本机复验了锁修复：Linux 未在本机单独运行，最低 Node.js 版本也未单独运行；GitHub Actions 新提交后的三平台结果仍以远端 CI 为准。
 - PDF 回退仍是受限解析器；冲突字体映射会明确报错，扫描件仍需 OCR。
 - 索引备份不包含正文版本，不能替代完整数据目录备份。
 
@@ -67,4 +86,4 @@ npm pack --dry-run --json --ignore-scripts
 git diff --check
 ```
 
-Results here describe local automated checks. They do not certify real-model calls, GUI layout, remote CI success or live Windows/Linux behavior. Development tests and local archives are excluded from the plugin package.
+Results here describe local automated checks. They do not certify real-model calls, GUI layout, remote CI success or live Linux behavior. Development tests and local archives are excluded from the plugin package.
