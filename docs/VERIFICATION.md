@@ -126,3 +126,8 @@ Results here describe local automated checks. They do not certify real-model cal
 
 - Settings「权限与设置」新增共享库卡片（新建/勾选工作区/撤销），走 owner RPC；本地测试仍 118/118。
 - 未验证：浏览器内实际勾选流程（需刷新页面）与三平台 CI。
+
+### v1.6.0 实机共享验收
+
+- 共享卡片可见；新建 `testshared` 并勾选两个工作区；readers 与 4 条 grant/revoke 审计已落盘。
+- 未执行：跨工作区浏览器检索断言、三平台 CI。

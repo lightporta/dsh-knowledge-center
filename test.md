@@ -83,3 +83,10 @@ v1.2.0 发布前同一套件在 Windows（Node.js 22.23.4 与 24.16.0）下连�
 
 - 「权限与设置」新增「共享知识库」卡片：新建共享库、按工作区勾选/取消、显示已共享数量；调用 `createCollection(scope:shared)`、`setCollectionShare`、`listShares`。
 - 共享与撤销均为 owner 操作；模型工具仍不能改可见性、不能写共享库。
+
+## 真实宿主共享验收（v1.6.0，2026-10-25）
+
+- 「权限与设置」出现「共享知识库」卡片；实测新建 `testshared`（scope=shared）并勾选两个工作区。
+- `index.json`：readers = `D:\dsh-knowledge-center`、`D:\Edgefile\Photo_storage`；`permissions` 两者均为 true。
+- 审计：4 条记录（grant Photo_storage → grant dsh-knowledge-center → revoke Photo_storage → grant Photo_storage），actor=owner。
+- 未执行：浏览器内跨工作区检索断言（需要以 Photo_storage 为工作区开一个会话）；三平台 CI。

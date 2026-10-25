@@ -238,7 +238,7 @@ generator: "provider/model"
 
 ### 已知限制
 
-- 提取为尽力而为：PDF 只提取文本层（扫描件需 OCR）；旧版 Office 需要 LibreOffice 服务；复杂版式（分栏、表格合并、图表）只保留文本顺序，不保留视觉布局。
+- 提取为尽力而为：PDF 只提取文本层（扫描件需 OCR）；旧版 Office 需要 LibreOffice 服务；复杂版式（分栏、表格合并、图表）只保留文本顺序，不保留视觉布局。损坏或上传不完整的 OOXML（无 ZIP 中央目录）会明确报错，需重新导出后再试。
 - 检索为本地关键词 + 摘要匹配，**没有向量嵌入**；适合数百篇规模，不适合大规模语义检索。
 - 提炼质量与速度取决于 Harness 中配置的默认模型；单篇超长文档只提炼前约 192k 字符，会在 front matter 中标记 `truncated: true`。
 - 本机共享存储使用跨进程锁保护索引读改写，可协调同机多个 profile；不支持多人协作 / 云同步 / 知识正文版本历史。仅对确认退出的本机持锁进程自动回收锁，无法验证时超时并报错。
@@ -539,7 +539,7 @@ All platform-sensitive logic is centralized in `lib/paths.js` (`canonicalPath`, 
 
 ### Known limitations
 
-- Extraction is best-effort: PDF reads the text layer only (scanned documents need OCR); legacy Office requires the LibreOffice service; complex layouts keep text order but not visual structure.
+- Extraction is best-effort: PDF reads the text layer only (scanned documents need OCR); legacy Office requires the LibreOffice service; complex layouts keep text order but not visual structure. Corrupted or incompletely uploaded OOXML (no ZIP central directory) fails with a clear error and must be re-exported.
 - Retrieval is local keyword/summary matching with **no vector embeddings**; suitable for hundreds of notes, not for large-scale semantic search.
 - Distillation quality and speed depend on the configured default model; very long documents are distilled from roughly the first 192k characters and marked `truncated: true` in the front matter.
 - Local shared storage uses a cross-process lock for index updates across profiles on the same machine. No team collaboration, cloud sync or note-body revision history. Lock recovery requires a confirmed exited local owner; an unverifiable owner causes a timeout instead of stealing the lock.
