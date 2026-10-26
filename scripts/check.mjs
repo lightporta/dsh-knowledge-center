@@ -2,6 +2,7 @@ import { readdir, readFile, stat } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
 import { join, relative } from 'node:path'
 import { spawnSync } from 'node:child_process'
+import { containsLocalAbsolutePath } from './check-paths.mjs'
 
 const root = fileURLToPath(new URL('../', import.meta.url))
 const sources = ['index.js', 'client.js']
@@ -11,7 +12,7 @@ async function collect(directory) {
   try {
     entries = await readdir(join(root, directory), { withFileTypes: true })
   } catch (error) {
-    // v1.2.0 no longer ships test files; a missing optional directory is not a failure.
+    // Development directories may be absent in an extracted runtime package.
     if (error.code === 'ENOENT') return
     throw error
   }
@@ -22,7 +23,7 @@ async function collect(directory) {
   }
 }
 
-for (const directory of ['lib', 'scripts']) await collect(directory)
+for (const directory of ['lib', 'scripts', 'test']) await collect(directory)
 for (const file of sources.sort()) {
   const result = spawnSync(process.execPath, ['--check', join(root, file)], { stdio: 'inherit' })
   if (result.error) throw result.error
@@ -30,8 +31,7 @@ for (const file of sources.sort()) {
 }
 console.log(`Syntax checked ${sources.length} files in ${relative(process.cwd(), root) || '.'}`)
 
-// Release guard that replaced test/manifest.test.mjs in v1.2.0: the package
-// contract stays checked even though the regression suite is no longer shipped.
+// Check the release contract alongside the repository's regression suite.
 const readJson = async (name) => JSON.parse(await readFile(join(root, name), 'utf8'))
 const exists = async (name) => {
   try {
@@ -72,7 +72,7 @@ console.log(`Manifest OK ${manifest.name}@${manifest.version}`)
 const leakScan = async (name) => {
   if (!(await exists(name))) return
   const text = await readFile(join(root, name), 'utf8')
-  if (/[A-Za-z]:\\\\Users\\\\/i.test(text) || /[D-Z]:\\\\/i.test(text) || /\/Users\/[A-Za-z0-9._-]+\//.test(text) || /\/home\/[A-Za-z0-9._-]+\//.test(text)) {
+  if (containsLocalAbsolutePath(text)) {
     fail(`${name} contains a local absolute path`)
   }
 }

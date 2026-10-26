@@ -563,3 +563,207 @@ test('tabs connect to their panels and support arrow, Home and End navigation', 
     assert.equal(focused, true)
   }
 })
+
+const sharingState = () => ({
+  ...state,
+  collections: [...state.collections, { id: 'team', name: 'Team', scope: 'shared', entryCount: 0, readers: ['/A', '/B'], readerWorkspaceIds: ['workspace-a', 'workspace-b'] }],
+  totals: { entries: 2, collections: 2 },
+  workspaces: [
+    { id: 'workspace-a', path: '/A', title: 'Workspace A', allowed: true },
+    { id: 'workspace-b', path: '/B', title: 'Workspace B', allowed: true },
+  ],
+})
+
+test('shared deletion warnings count the readers supplied by the host state', async (t) => {
+  const library = sharingState()
+  const harness = mountClient({ state: library, rpc: () => ({ collections: library.collections, shares: [] }) })
+  t.after(() => harness.unmount())
+  await harness.flush()
+  harness.click(harness.button('Delete'))
+  await harness.flush()
+  assert.ok(textContent(harness.tree).includes('2 workspace(s) lose access immediately.'))
+})
+
+test('late independent sharing snapshots cannot replace the shared library state', async (t) => {
+  const library = sharingState()
+  const oldSnapshot = deferred()
+  let shareReads = 0
+  const harness = mountClient({
+    state: library,
+    rpc(method) {
+      assert.equal(method, 'listShares')
+      if (shareReads++ === 0) return oldSnapshot.promise
+      return { collections: library.collections, shares: [] }
+    },
+  })
+  t.after(() => harness.unmount())
+  await harness.flush()
+  assert.ok(harness.button('Workspace A ✓'))
+  oldSnapshot.resolve({ collections: [{ ...library.collections[1], readers: [] }], shares: [] })
+  await harness.flush()
+  assert.ok(harness.button('Workspace A ✓'), 'current state must remain the source of sharing truth')
+})
+
+test('parallel sharing changes retain an independent pending state for each workspace', async (t) => {
+  const library = sharingState()
+  library.collections[1].readers = []
+  library.collections[1].readerWorkspaceIds = []
+  const changes = []
+  const harness = mountClient({
+    state: library,
+    rpc(method, params) {
+      if (method === 'listShares') return { collections: library.collections, shares: [] }
+      assert.equal(method, 'setCollectionShare')
+      const change = deferred()
+      changes.push({ ...change, params })
+      return change.promise
+    },
+  })
+  t.after(() => harness.unmount())
+  await harness.flush()
+  const firstButton = harness.button('Workspace A')
+  const first = harness.click(firstButton)
+  await harness.click(firstButton)
+  assert.equal(changes.length, 1, 'two queued clicks cannot submit the same grant twice')
+  await harness.flush()
+  const second = harness.click(harness.button('Workspace B'))
+  await harness.flush()
+  assert.equal(harness.button('Workspace A').props.disabled, true)
+  assert.equal(harness.button('Workspace B').props.disabled, true)
+  changes[0].resolve({ id: 'team', readers: ['/A'] })
+  await first
+  await harness.flush()
+  assert.equal(harness.button('Workspace B').props.disabled, true, 'finishing A cannot unlock B')
+  changes[1].resolve({ id: 'team', readers: ['/A', '/B'] })
+  await second
+  await harness.flush()
+})
+
+test('moving a note reloads its source before editing or exporting the new library metadata', async (t) => {
+  const library = sharingState()
+  let moved = false
+  const original = { ...document('A'), source: '---\ncollectionId: "shared"\ncollection: "Shared"\n---\n# Note A' }
+  const updated = { ...document('A'), meta: { ...entry('A'), collectionId: 'team', collectionName: 'Team' }, source: '---\ncollectionId: "team"\ncollection: "Team"\n---\n# Note A' }
+  const harness = mountClient({
+    state: library,
+    rpc(method) {
+      if (method === 'listShares') return { collections: library.collections, shares: [] }
+      if (method === 'read') return moved ? updated : original
+      assert.equal(method, 'moveEntry')
+      moved = true
+      return updated.meta
+    },
+  })
+  t.after(() => harness.unmount())
+  await harness.flush()
+  harness.click(harness.entry('Note A'))
+  await harness.flush()
+  harness.nodes((node) => node.type === 'select' && node.props['aria-label'] === 'Move to…')[0].props.onChange({ target: { value: 'team' } })
+  await harness.flush()
+  await harness.click(harness.button('Move'))
+  await harness.flush()
+  harness.click(harness.button('Edit'))
+  await harness.flush()
+  assert.equal(harness.nodes((node) => node.type === 'textarea')[0].props.value, updated.source)
+  assert.equal(harness.nodes((node) => node.type === 'select' && node.props['aria-label'] === 'Move to…')[0].props.disabled, true)
+})
+
+test('a move destination does not carry over to another note', async (t) => {
+  const library = sharingState()
+  const harness = mountClient({
+    state: library,
+    rpc(method, params) {
+      if (method === 'listShares') return { collections: library.collections, shares: [] }
+      assert.equal(method, 'read')
+      return document(params.id)
+    },
+  })
+  t.after(() => harness.unmount())
+  await harness.flush()
+  harness.click(harness.entry('Note A'))
+  await harness.flush()
+  harness.nodes((node) => node.type === 'select' && node.props['aria-label'] === 'Move to…')[0].props.onChange({ target: { value: 'team' } })
+  await harness.flush()
+  harness.click(harness.button('← Back to list'))
+  await harness.flush()
+  harness.click(harness.entry('Note B'))
+  await harness.flush()
+  assert.equal(harness.nodes((node) => node.type === 'select' && node.props['aria-label'] === 'Move to…')[0].props.value, '')
+  assert.equal(harness.button('Move').props.disabled, true)
+})
+
+test('sharing membership follows host workspace ids rather than case-folded paths', async (t) => {
+  const library = sharingState()
+  library.collections[1].readers = ['/Repo']
+  library.collections[1].readerWorkspaceIds = ['upper']
+  library.workspaces = [
+    { id: 'upper', path: '/Repo', title: 'Uppercase project', allowed: true },
+    { id: 'lower', path: '/repo', title: 'Lowercase project', allowed: true },
+  ]
+  const harness = mountClient({ state: library, rpc: () => ({ collections: library.collections, shares: [] }) })
+  t.after(() => harness.unmount())
+  await harness.flush()
+  assert.equal(harness.button('Uppercase project ✓').props['aria-pressed'], true)
+  assert.equal(harness.button('Lowercase project').props['aria-pressed'], false)
+})
+
+test('a failed move refresh cannot expose the previous source under the new library', async (t) => {
+  const library = sharingState()
+  let moved = false
+  const harness = mountClient({
+    state: library,
+    rpc(method) {
+      if (method === 'read') {
+        if (moved) throw new Error('moved note could not be reloaded')
+        return document('A')
+      }
+      if (method === 'listShares') return { collections: library.collections, shares: [] }
+      assert.equal(method, 'moveEntry')
+      moved = true
+      return { ...entry('A'), collectionId: 'team', collectionName: 'Team' }
+    },
+  })
+  t.after(() => harness.unmount())
+  await harness.flush()
+  harness.click(harness.entry('Note A'))
+  await harness.flush()
+  harness.nodes((node) => node.type === 'select' && node.props['aria-label'] === 'Move to…')[0].props.onChange({ target: { value: 'team' } })
+  await harness.flush()
+  await harness.click(harness.button('Move'))
+  await harness.flush()
+  assert.ok(textContent(harness.tree).includes('moved note could not be reloaded'))
+  for (const label of ['Edit', 'Copy', 'Download']) assert.equal(harness.button(label).props.disabled, true)
+  assert.notEqual(harness.button('← Back to list').props.disabled, true)
+})
+
+test('parallel model permission changes remain independently pending', async (t) => {
+  const library = sharingState()
+  const changes = []
+  const harness = mountClient({
+    state: library,
+    rpc(method, params) {
+      if (method === 'listShares') return { collections: library.collections, shares: [] }
+      assert.equal(method, 'setPermission')
+      const change = deferred()
+      changes.push({ ...change, params })
+      return change.promise
+    },
+  })
+  t.after(() => harness.unmount())
+  await harness.flush()
+  const permission = (title) => harness.nodes((node) => node.props.role === 'switch'
+    && node.props['aria-label'] === `Allow model access: ${title}`)[0]
+  const first = harness.click(permission('Workspace A'))
+  await harness.flush()
+  const second = harness.click(permission('Workspace B'))
+  await harness.flush()
+  assert.equal(permission('Workspace A').props.disabled, true)
+  assert.equal(permission('Workspace B').props.disabled, true)
+  changes[0].resolve({ allowed: false })
+  await first
+  await harness.flush()
+  assert.equal(permission('Workspace B').props.disabled, true)
+  changes[1].resolve({ allowed: false })
+  await second
+  await harness.flush()
+})

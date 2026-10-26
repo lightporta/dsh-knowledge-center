@@ -402,13 +402,30 @@ class KnowledgeStore {
     return withFileLock(this.lockPath, () => this.#readIndex())
   }
 
-  async mutate(operation) {
+  async mutate(operation, rollback) {
     await this.ready
     const run = this.queue.then(() => withFileLock(this.lockPath, async () => {
       const index = await this.#readIndex()
-      const result = await operation(index)
-      await this.#writeIndex(index)
-      return result
+      try {
+        const result = await operation(index)
+        await this.#writeIndex(index)
+        return result
+      } catch (error) {
+        if (rollback !== undefined) {
+          try {
+            // Compensation must finish before another writer can use the same
+            // entry. This handles reported failures, not a process/power loss.
+            await rollback()
+          } catch (rollbackError) {
+            const failure = new AggregateError([error, rollbackError],
+              `Knowledge update failed (${String(error?.message ?? error)}); rollback also failed (${String(rollbackError?.message ?? rollbackError)}).`,
+              { cause: error })
+            failure.code = 'KNOWLEDGE_ROLLBACK_FAILED'
+            throw failure
+          }
+        }
+        throw error
+      }
     }))
     this.queue = run.then(
       () => undefined,
@@ -825,6 +842,15 @@ async function findPdfToTextBinary() {
   }
 }
 
+async function extractLegacyOfficeText(officeToPdf, { extension, source, signal, resolveExecutable }) {
+  if (officeToPdf === undefined || officeToPdf === null || typeof officeToPdf.convert !== 'function') {
+    throw new Error(`Legacy Office format "${extension}" requires the Harness office-to-PDF service (LibreOffice).`)
+  }
+  signal?.throwIfAborted()
+  const conversion = await officeToPdf.convert({ extension: extension.slice(1), priority: 'foreground', source }, signal)
+  return extractPdfText(conversion.pdf, { signal, resolveExecutable })
+}
+
 /**
  * Read and reduce one workspace document to plain text. Binary formats are
  * extracted by `lib/extract.js`; legacy Office formats are converted to PDF by
@@ -860,13 +886,11 @@ async function readWorkspaceSource(ctx, workspacePath, relativePath, { signal, r
     return { text, bytes: size, format: 'pdf' }
   }
   if (LEGACY_OFFICE_EXTENSIONS.has(extension)) {
-    if (officeToPdf === undefined || officeToPdf === null) {
-      throw new Error(`Legacy Office format "${extension}" requires the Harness office-to-PDF service (LibreOffice).`)
-    }
     const version = String(info.version)
-    const conversion = await officeToPdf.convert({
-      extension: extension.slice(1),
-      priority: 'foreground',
+    const text = await extractLegacyOfficeText(officeToPdf, {
+      extension,
+      signal,
+      resolveExecutable,
       source: {
         key: `${workspacePath}::${relativePath}`,
         version,
@@ -876,8 +900,7 @@ async function readWorkspaceSource(ctx, workspacePath, relativePath, { signal, r
           return { bytes: current, version }
         },
       },
-    }, signal)
-    const text = await extractPdfText(conversion.pdf, { signal, resolveExecutable })
+    })
     return { text, bytes: size, format: `${extension.slice(1)} via PDF` }
   }
   const text = extractStructuredDocumentText({ extension, bytes })
@@ -1026,6 +1049,7 @@ function attachmentHostPath(ref, root) {
  * workspace files. The resolved path must stay inside the attachment store.
  */
 async function readAttachmentSource(ctx, ref, { signal, resolveExecutable, attachmentsRoot, path } = {}) {
+  signal?.throwIfAborted()
   const service = ctx.get('attachments')
   let hostPath = typeof path === 'string' && path.length > 0 ? path : undefined
   if (hostPath === undefined && service !== undefined && service !== null && typeof service.fileHostPath === 'function') {
@@ -1043,9 +1067,11 @@ async function readAttachmentSource(ctx, ref, { signal, resolveExecutable, attac
   const extension = extname(real).toLowerCase()
   if (!DOCUMENT_EXTENSIONS.has(extension)) throw new Error(`Unsupported attachment type "${extension}": ${ref.name}`)
   const info = await fsp.stat(real)
+  if (!info.isFile()) throw new Error(`Attachment is not a regular file: ${ref.name}`)
   const limit = TEXT_EXTENSIONS.has(extension) ? MAX_TEXT_BYTES : MAX_BINARY_BYTES
   if (info.size > limit) throw new Error(`Attachment is larger than ${Math.round(limit / (1024 * 1024))} MiB: ${ref.name}`)
-  const bytes = await fsp.readFile(real)
+  const bytes = await fsp.readFile(real, { signal })
+  if (bytes.length > limit) throw new Error(`Attachment is larger than ${Math.round(limit / (1024 * 1024))} MiB: ${ref.name}`)
   const digest = createHash('sha256').update(bytes).digest('hex')
   if (TEXT_EXTENSIONS.has(extension)) {
     const raw = bytes.toString('utf8')
@@ -1053,7 +1079,22 @@ async function readAttachmentSource(ctx, ref, { signal, resolveExecutable, attac
   }
   if (PDF_EXTENSIONS.has(extension)) return { text: await extractPdfText(bytes, { signal, resolveExecutable }), digest }
   if (LEGACY_OFFICE_EXTENSIONS.has(extension)) {
-    throw new Error(`Legacy Office attachments need the office-to-PDF service: ${ref.name}`)
+    const text = await extractLegacyOfficeText(ctx.get('officeToPdf'), {
+      extension,
+      signal,
+      resolveExecutable,
+      source: {
+        key: `knowledge-attachment:${digest}:${extension}`,
+        version: digest,
+        bytes: bytes.length,
+        read: async (readSignal, maxBytes = bytes.length) => {
+          readSignal?.throwIfAborted()
+          if (bytes.length > maxBytes) throw new Error('Attachment exceeds the Office conversion byte limit.')
+          return { bytes, version: digest }
+        },
+      },
+    })
+    return { text, digest }
   }
   return { text: extractStructuredDocumentText({ extension, bytes }), digest }
 }
@@ -1485,6 +1526,10 @@ function createApi(ctx, store) {
           name: collection.name,
           scope: collection.scope,
           workspacePath: collection.workspacePath ?? null,
+          readers: Array.isArray(collection.readers) ? collection.readers : [],
+          readerWorkspaceIds: workspaces
+            .filter((workspace) => Array.isArray(collection.readers) && collection.readers.some((reader) => comparisonKey(reader) === comparisonKey(workspace.path)))
+            .map((workspace) => workspace.id),
           createdAt: collection.createdAt,
           updatedAt: collection.updatedAt,
           entryCount: index.entries.filter((entry) => entry.collectionId === collection.id).length,
@@ -1664,8 +1709,9 @@ function createApi(ctx, store) {
       const data = asRecord(payload)
       const id = asString(data.id, 'id')
       const collectionId = asString(data.collectionId, 'collectionId')
-      const now = Date.now()
-      const moved = await store.mutate((index) => {
+      let previousFile
+      let restoreFile = false
+      return store.mutate(async (index) => {
         const entry = index.entries.find((candidate) => candidate.id === id)
         if (entry === undefined) throw new Error(`Knowledge note not found: ${id}`)
         const collection = index.collections.find((candidate) => candidate.id === collectionId)
@@ -1681,26 +1727,32 @@ function createApi(ctx, store) {
         if (duplicate !== undefined) {
           throw new Error(`The target knowledge base already holds a note for this source (${entry.sources[0]}).`)
         }
-        entry.collectionId = collection.id
-        entry.updatedAt = now
-        return { entry, collection }
-      })
-      // The Markdown copy is a shared artifact; keep its front matter aligned with the index.
-      try {
+        const now = Date.now()
+        const previousCollection = index.collections.find((candidate) => candidate.id === entry.collectionId)
+        // Read and rewrite the same entry while holding the index lock. A move
+        // must not overwrite a concurrent edit or recreate a deleted note.
         const file = await store.readEntryFile(id)
+        previousFile = file
         const parsed = parseFrontmatter(file)
         const frontmatter = {
-          ...parsed.meta,
-          collectionId: moved.collection.id,
-          collection: moved.collection.name,
+          ...parsed.data,
+          collectionId: collection.id,
+          collection: collection.name,
           updatedAt: now,
         }
-        await store.writeEntryFile(id, `${serializeFrontmatter(frontmatter)}\n\n${parsed.body}`)
-      } catch (error) {
-        if (error?.code !== 'ENOENT') throw error
-      }
-      const index = await store.readIndex()
-      return entryMetadata(index, index.entries.find((candidate) => candidate.id === id) ?? moved.entry)
+        const content = `${serializeFrontmatter(frontmatter)}\n${parsed.body}`
+        await store.writeEntryFile(id, content)
+        restoreFile = true
+        // Do not commit a new collection until the note file was written.
+        entry.collectionId = collection.id
+        entry.updatedAt = now
+        entry.size = Buffer.byteLength(content)
+        if (previousCollection !== undefined) previousCollection.updatedAt = now
+        collection.updatedAt = now
+        return entryMetadata(index, entry)
+      }, async () => {
+        if (restoreFile) await store.writeEntryFile(id, previousFile)
+      })
     },
     async deleteEntry(payload) {
       const data = asRecord(payload)

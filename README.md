@@ -1,5 +1,7 @@
 # dsh-knowledge-center
 
+**v1.8.4 · 2026-10-26** — 共享、条目移动与附件导入可靠性维护 / Reliability fixes for sharing, note moves and attachment ingestion.
+
 **知识中心 / Knowledge Center** — a [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) plugin that distills workspace documents into reusable Markdown knowledge, renders it like VS Code in a sidebar panel and Settings, and lets permitted workspaces use it through agent tools.
 
 一个 DeepSeek Harness 插件：阅读工作区文档，用当前默认模型提炼为可复用的 Markdown 知识，在侧边栏面板与 Settings 中以类 VS Code 的样式渲染，并允许被授权的工作区让模型通过工具检索、使用这些知识。
@@ -25,7 +27,7 @@
 | --- | --- |
 | 知识库（Knowledge Base），源文件可查看渲染后的 Markdown 或 Markdown 源码 | 「知识库」页签：多知识库、条目列表、渲染/源码切换、复制、下载、编辑保存 |
 | Repo Wiki / Knowledge Card：从仓库/文档生成结构化 Markdown 知识 | 「生成知识」页签：扫描工作区文档 → 默认模型提炼 → 存入知识库，同一来源重复生成会更新 |
-| 按用户 / 工作区作用域使用，Agent 在任务中自动检索 | 「权限与设置」页签：按工作区授权；模型工具 `knowledge_search` / `knowledge_read` / `knowledge_ingest` |
+| 按用户 / 工作区作用域使用，Agent 在任务中自动检索 | 「权限与设置」页签：按工作区授权；模型工具 `knowledge_search` / `knowledge_read` / `knowledge_ingest` / `knowledge_ingest_attachment` |
 | 入口位于侧边栏「知识中心」 | 侧边栏知识图标（整页面板）+ Settings → 知识中心（设置页）。受 Harness 当前版本限制，Settings 左侧导航图标对第三方分区固定回退为齿轮，因此**带知识图标的入口是侧边栏面板** |
 
 ### 功能
@@ -40,7 +42,7 @@
   - 提炼自愈：模型输出被推理 token 占满而截断时，先放大输出预算重试，仍然截断才降级提炼调用的推理强度；因此 `reasoningEffort: max` 下也能产出完整笔记，agent 自身的推理强度不受影响。
   - 同一「工作区 + 来源相对路径」重复生成时**更新原条目**，不会重复创建。
 - **知识库管理**
-  - 支持多个知识库（Knowledge Base），作用域为「用户」或「工作区」；工作区知识库只在该工作区可用。
+  - 支持多个知识库（Knowledge Base），作用域为「用户」「工作区」或「共享」；工作区库只在所属工作区可用，共享库由 owner 授权给指定工作区。
   - 条目支持搜索、渲染预览、Markdown 源码查看、复制、下载、在线编辑保存、删除；知识库支持删除（同时删除其条目）。
 - **类 VS Code 的 Markdown 渲染**
   - 标题底边线、行内代码、代码块、引用、表格、任务列表、有序/无序列表、链接、分隔线等。
@@ -143,8 +145,9 @@ Markdown 预览采用与 VS Code Markdown 预览接近的排版：14px 正文、
 | `knowledge_search` | 检索知识：标题、摘要、来源、正文关键词；返回 id、标题、知识库、摘要、片段与可访问知识库列表 | `query`（可空，空则返回最近更新）、`limit`（1–50，默认 8）、`collectionId`（可选） | 需授权工作区 |
 | `knowledge_read` | 读取一篇完整知识 Markdown | `id` | 需授权工作区 |
 | `knowledge_ingest` | 在用户明确要求时，把工作区文档提炼进知识库（每次最多 3 个路径） | `paths`（工作区相对路径数组）、`collectionId`（可选）、`language`（`zh` / `en`） | 需授权工作区 |
+| `knowledge_ingest_attachment` | 在用户明确要求时，提炼当前会话附件（每次最多 3 个文件） | `path`（附件提示中的已保存路径）或 `name`（匹配当前会话附件），`collectionId` / `language`（可选） | 需授权工作区，只能写当前工作区库 |
 
-模型只能在被授权工作区访问该工作区可见的知识：用户作用域知识库 + 该工作区作用域知识库。工具在未授权工作区会返回明确的权限提示，不会返回任何知识内容。
+模型只能在被授权工作区访问该工作区可见的知识：用户库、当前工作区库及 owner 明确共享给该工作区的库。两个提炼工具只能写当前工作区库。工具在未授权工作区会返回明确的权限提示，不会返回任何知识内容。
 
 ### 数据与 Markdown 格式
 
@@ -222,7 +225,7 @@ generator: "provider/model"
 - **Host 半**（`index.js` + `lib/paths.js` + `lib/text.js`）：知识库存储（JSON 索引 + Markdown 文件、原子写）、工作区文档扫描（通过 Harness 组合文件系统）、LLM 提炼流水线（单篇直出 / 长文 map-reduce，字符预算 192k）、权限判断、RPC 路由、模型工具与系统提示词。零第三方运行时依赖。
 - **Client 半**（`client.js`）：一个浏览器 Cordis 插件，注册三个槽位——`sidebar.panellist`（左侧栏知识图标）、`main`（整页知识中心面板）与 `settings.section`（Settings 设置页）；自研 Markdown→React 渲染器；配色以 Harness 主题令牌为主（装饰性元素使用令牌回退）；通过 `ctx.connection.rpc.call` 调用 Host。
 - **提炼流水线**：读取文档 →（长文档）分片提炼要点 → 合并为结构化知识 Markdown → 写入 front matter + 索引；同一来源按（工作区, 相对路径）更新已有条目。
-- **工具注册**：`knowledge_search` / `knowledge_read` / `knowledge_ingest` 注册在 Harness Tool Registry，提示词章节说明能力与权限边界。
+- **工具注册**：`knowledge_search` / `knowledge_read` / `knowledge_ingest` / `knowledge_ingest_attachment` 注册在 Harness Tool Registry，提示词章节说明能力与权限边界。
 
 ### 跨平台支持
 
@@ -230,11 +233,13 @@ generator: "provider/model"
 
 | 平台 | 支持 | 说明 |
 | --- | --- | --- |
-| macOS | ✅ | 已在本机完成端到端验证（安装、提炼、检索、RPC、Settings 注册） |
-| Windows | ✅（设计目标） | 路径使用 `node:path` 的 win32 规则：盘符 / UNC 根、`\` 分隔符、大小写不敏感比较；数据目录由 `DSH_HOME` 或 `os.homedir()` 决定。CI 在 windows-latest 上运行语法与包清单检查；尚未在真机 Windows 上做完整 UI 端到端验证 |
-| Linux | ✅（设计目标） | POSIX 路径规则与 macOS 相同；CI 在 ubuntu-latest 上运行语法与包清单检查；尚未在真机 Linux 上做完整 UI 端到端验证 |
+| macOS | ✅ | 有历史安装、提炼、检索、RPC 与 Settings 注册验证；v1.8.4 发布前在本机通过 152 项回归测试 |
+| Windows | ✅ | 使用 win32 路径规则；已完成本机锁修复及历史真实模型、附件流程验证。CI 在 windows-latest 上运行语法、清单及测试 |
+| Linux | ✅（CI 覆盖） | 使用 POSIX 路径规则；CI 在 ubuntu-latest 上运行语法、清单及测试；未做真实宿主 GUI 端到端验证 |
 
-跨平台逻辑集中在 `lib/paths.js`（`canonicalPath` / `comparisonKey` / `isSameOrInside` / `normalizeSourcePath` / `sourceKey` / `resolveDshHome`），并已按 `win32`、`darwin` 与 POSIX 规则分别验证（v1.2.0 前由随仓库测试覆盖）：Windows/macOS 按大小写不敏感比较，Linux 保持大小写敏感；来源路径统一为正斜杠后再去重。
+跨平台逻辑集中在 `lib/paths.js`，由仓库测试显式覆盖 `win32`、`darwin` 与 POSIX 规则。工作区路径比较仅 Windows 忽略大小写；来源路径先统一为正斜杠，再在 Windows/macOS 忽略大小写去重。数据目录由 `DSH_HOME` 或 `os.homedir()` 决定。
+
+v1.8.3 基线已通过三平台 CI；v1.8.4 本轮完成 macOS 本地验证，新提交的三平台结果需在推送后确认。历史实机证据与本轮验证边界见 [验证记录](docs/VERIFICATION.md) 和 [测试记录](test.md)。
 
 ### 已知限制
 
@@ -243,7 +248,7 @@ generator: "provider/model"
 - 提炼质量与速度取决于 Harness 中配置的默认模型；单篇超长文档只提炼前约 192k 字符，会在 front matter 中标记 `truncated: true`。
 - 本机共享存储使用跨进程锁保护索引读改写，可协调同机多个 profile；不支持多人协作 / 云同步 / 知识正文版本历史。仅对确认退出的本机持锁进程自动回收锁，无法验证时超时并报错。
 - Harness 0.2.1-rc.3 的 Settings 导航图标由内置 shell 硬编码，第三方 Settings 分区统一回退为齿轮；插件改用受支持的侧边栏知识图标作为主入口（见 FAQ）。
-- 尚未包含自动化 UI 视觉回归测试；Windows/Linux 的 UI 端到端验证待补。
+- 尚未包含自动化 UI 视觉回归测试；v1.8.4 修改后的真实 Harness GUI 全流程待验收。
 
 ### 开发
 
@@ -253,11 +258,14 @@ dsh-knowledge-center/
 ├── lib/paths.js             # 跨平台路径工具（POSIX / win32）
 ├── lib/text.js              # 提炼分片的字符预算
 ├── lib/extract.js           # 文档文本提取（DOCX/XLSX/PPTX/PDF/HTML 等）
+├── lib/lock.js              # 本机跨进程文件锁与清理
 ├── client.js                # Client 半：侧边栏图标 + 整页面板 + Settings 页 + Markdown 渲染器
 ├── cordis.patch.yml         # DSH bundle patch（插入 Host row；Cordis = Harness 插件框架，与 Qoder 无关）
 ├── locale/                  # 插件清单显示标题/描述（en / zh）
-├── scripts/                # 跨平台测试与语法检查入口
-├── docs/VERIFICATION.md    # 验证方法、结果和边界
+├── scripts/                 # 跨平台测试与语法检查入口
+├── test/                    # 核心回归测试（开发仓库与 CI）
+├── docs/                    # 提取说明、修复记录与验证边界
+├── test.md                  # 当前用例清单与历史结果
 ├── .github/workflows/ci.yml # 三平台 CI（语法 + JSON + 单测）
 ├── README.md
 └── LICENSE
@@ -265,12 +273,9 @@ dsh-knowledge-center/
 
 ```bash
 # 无构建步骤、无第三方运行时依赖
-node --check index.js
-node --check client.js
-node --check lib/paths.js
-node --check lib/text.js
-node --check lib/extract.js
-npm run check     # 语法检查合集
+npm test          # 隔离的核心回归测试
+npm run check     # 语法、包清单、本地化与路径检查
+npm pack --dry-run --ignore-scripts  # 发布文件清单
 ```
 
 本地开发提示：
@@ -293,8 +298,8 @@ npm run check     # 语法检查合集
 **问：为什么 Settings 里「知识中心」前面的图标还是齿轮？**
 Harness 0.2.1-rc.3 的 Settings 导航图标由内置 shell 按 section id 硬编码（`account`/`models`/`plugins`/`agent-presets`/`archived-sessions`），第三方 Settings 分区没有自定义 icon API，统一回退为齿轮。因此插件把定制的知识图标放在官方支持的**侧边栏面板入口**上；若未来 Harness 暴露 Settings section icon 字段，会切换过去。
 
-**问：仓库里为什么没有测试文件了？**
-v1.2.0 发布前在本机连续 3 轮 113/113 通过后，按要求移除了测试目录；`npm run check` 仍做语法与包清单/本地化校验，验证记录见 [验证记录](docs/VERIFICATION.md)。
+**问：测试文件会进入插件发布包吗？**
+不会。核心回归测试保留在开发仓库，供本地与三平台 CI 执行；`test/`、`scripts/` 及本地归档不进入 npm 插件包。用例清单与结果见 [测试记录](test.md)，发布清单可用 `npm pack --dry-run --ignore-scripts` 核对。
 
 **问：知识文件里会不会包含我的绝对路径？**
 不会。front matter 不含 workspace 绝对路径，`sources` 是工作区相对路径；绝对路径只保存在本机 `index.json`。
@@ -328,7 +333,7 @@ The interaction model is inspired by Qoder CN's knowledge features:
 | --- | --- |
 | Knowledge Base with source files previewable as rendered Markdown or Markdown source | "Knowledge Base" tab: multiple libraries, entry list, rendered/source toggle, copy, download, edit and save |
 | Repo Wiki / Knowledge Cards distilled from repositories and documents | "Generate" tab: scan workspace documents → distill with the default model → store into a library; re-generating a source updates the same entry |
-| User / workspace scoped usage; the agent retrieves knowledge during tasks | "Access & Settings" tab: per-workspace grants; `knowledge_search` / `knowledge_read` / `knowledge_ingest` tools |
+| User / workspace scoped usage; the agent retrieves knowledge during tasks | "Access & Settings" tab: per-workspace grants; `knowledge_search` / `knowledge_read` / `knowledge_ingest` / `knowledge_ingest_attachment` tools |
 | Entry point in the sidebar "Knowledge Center" | Sidebar knowledge icon (full-page panel) + Settings → Knowledge Center. Harness 0.2.1-rc.3 hardcodes Settings nav icons and falls back to a gear for third-party sections, so the **custom knowledge icon lives on the supported sidebar panel entry** |
 
 ### Features
@@ -340,10 +345,10 @@ The interaction model is inspired by Qoder CN's knowledge features:
   - Scans workspace documents including Markdown, TXT, CSV, HTML, PDF, Word, Excel and PowerPoint (full list in the next section).
   - Uses the Harness default model to produce a structured knowledge note: title, summary, key points, details, when to use it, sources.
   - Long documents are distilled in chunks and merged (up to 16 chunks, roughly 192k characters per document).
-- Self-healing distillation: when a note is truncated because reasoning tokens consumed the output budget, the call is retried with a larger budget and only then with a bounded reasoning effort, so `reasoningEffort: max` still produces a complete note without changing the agent's own effort.
+  - Self-healing distillation: when a note is truncated because reasoning tokens consumed the output budget, the call is retried with a larger budget and only then with a bounded reasoning effort, so `reasoningEffort: max` still produces a complete note without changing the agent's own effort.
   - Re-generating the same workspace-relative source **updates** the existing note instead of duplicating it.
 - **Knowledge library management**
-  - Multiple knowledge bases with `user` or `workspace` scope; workspace-scoped libraries are only visible inside that workspace.
+  - Multiple knowledge bases with `user`, `workspace` or `shared` scope; workspace libraries stay within their workspace, and shared libraries require explicit owner grants to selected workspaces.
   - Entries support search, rendered preview, Markdown source view, copy, download, in-place edit and delete; libraries can be deleted (with their entries).
 - **VS Code-like Markdown rendering**
   - Heading underlines, inline code, fenced code, quotes, tables, task lists, ordered/unordered lists, links, horizontal rules.
@@ -446,8 +451,9 @@ The preview closely follows VS Code's Markdown preview: 14px body text, underlin
 | `knowledge_search` | Search knowledge by title, summary, source and body keywords; returns ids, titles, library, summary, snippet and the accessible library list | `query` (may be empty → newest notes), `limit` (1–50, default 8), `collectionId` (optional) | Granted workspace required |
 | `knowledge_read` | Read one full knowledge Markdown note | `id` | Granted workspace required |
 | `knowledge_ingest` | Distill workspace documents into the library when the user explicitly asks (max 3 paths per call) | `paths` (workspace-relative array), `collectionId` (optional), `language` (`zh` / `en`) | Granted workspace required |
+| `knowledge_ingest_attachment` | Distill current-conversation attachments when the user explicitly asks (max 3 files per call) | `path` (saved path from the attachment prompt) or `name` (match a session attachment), optional `collectionId` / `language` | Granted workspace required; writes only its workspace library |
 
-A model can only access knowledge visible to the calling workspace: user-scoped libraries plus that workspace's libraries. Outside a grant, tools fail with an explicit permission message and return no knowledge content.
+A model can only access user libraries, its own workspace libraries and libraries explicitly shared with that workspace by the owner. Both ingestion tools write only to the current workspace library. Outside a grant, tools fail with an explicit permission message and return no knowledge content.
 
 ### Data and Markdown format
 
@@ -523,7 +529,7 @@ Browser (client.js)                          Host (index.js)
 - **Host half** (`index.js` + `lib/paths.js` + `lib/text.js`): library storage (JSON index + Markdown files, atomic writes), workspace document scanning through the composed Harness filesystem, LLM distillation (single-shot or map-reduce for long documents, 192k-character budget), permission checks, RPC route, agent tools and the system-prompt section. Zero third-party runtime dependencies.
 - **Client half** (`client.js`): a browser Cordis plugin registering three slots — `sidebar.panellist` (sidebar knowledge icon), `main` (full-page Knowledge Center panel) and `settings.section` (Settings page); a self-contained Markdown-to-React renderer; theme-token-driven colors (with token fallbacks for decorative elements); Host calls through `ctx.connection.rpc.call`.
 - **Distillation pipeline**: read document → (for long documents) distill chunk notes → merge into one structured Markdown note → write front matter + index; re-ingesting the same (workspace, relative path) updates the existing entry.
-- **Tool registration**: `knowledge_search`, `knowledge_read`, `knowledge_ingest` register in the Harness Tool Registry; the prompt section explains the capability and permission boundary.
+- **Tool registration**: `knowledge_search`, `knowledge_read`, `knowledge_ingest`, `knowledge_ingest_attachment` register in the Harness Tool Registry; the prompt section explains the capability and permission boundary.
 
 ### Cross-platform
 
@@ -531,11 +537,13 @@ The plugin uses no macOS-specific API; the Host half runs in Harness's Node.js H
 
 | Platform | Support | Notes |
 | --- | --- | --- |
-| macOS | ✅ | End-to-end verified locally (install, distillation, retrieval, RPC, Settings registration) |
-| Windows | ✅ (design target) | Paths use `node:path` win32 rules: drive/UNC roots, `\` separators, case-insensitive comparisons; the data directory comes from `DSH_HOME` or `os.homedir()`. CI runs syntax and manifest checks on windows-latest; full UI end-to-end verification on a real Windows machine is still pending |
-| Linux | ✅ (design target) | POSIX path rules, identical to macOS; CI runs syntax and manifest checks on ubuntu-latest; full UI end-to-end verification on a real Linux machine is still pending |
+| macOS | ✅ | Historical install, distillation, retrieval, RPC and Settings checks; all 152 local regression tests pass for v1.8.4 |
+| Windows | ✅ | Uses win32 path rules; local lock regression checks and historical live-model/attachment flows verified. CI runs syntax, manifest checks and tests on windows-latest |
+| Linux | ✅ (CI coverage) | Uses POSIX path rules; CI runs syntax, manifest checks and tests on ubuntu-latest; no real Harness GUI end-to-end verification |
 
-All platform-sensitive logic is centralized in `lib/paths.js` (`canonicalPath`, `comparisonKey`, `isSameOrInside`, `normalizeSourcePath`, `sourceKey`, `resolveDshHome`) and validated for `win32`, `darwin` and POSIX rules explicitly (covered by the shipped tests before v1.2.0): Windows/macOS compare case-insensitively, Linux stays case-sensitive, and source paths are normalized to forward slashes before deduplication.
+Platform-sensitive logic is centralized in `lib/paths.js`, with repository tests explicitly covering `win32`, `darwin` and POSIX rules. Workspace paths compare case-insensitively only on Windows; source paths use forward slashes and case-insensitive deduplication on Windows/macOS. The data directory comes from `DSH_HOME` or `os.homedir()`.
+
+The v1.8.3 baseline passed CI on all three platforms. This v1.8.4 round is locally verified on macOS; CI for the new commit must be confirmed after pushing. Historical live evidence and current limits are in the [verification log](docs/VERIFICATION.md) and [test record](test.md).
 
 ### Known limitations
 
@@ -544,7 +552,7 @@ All platform-sensitive logic is centralized in `lib/paths.js` (`canonicalPath`, 
 - Distillation quality and speed depend on the configured default model; very long documents are distilled from roughly the first 192k characters and marked `truncated: true` in the front matter.
 - Local shared storage uses a cross-process lock for index updates across profiles on the same machine. No team collaboration, cloud sync or note-body revision history. Lock recovery requires a confirmed exited local owner; an unverifiable owner causes a timeout instead of stealing the lock.
 - Harness 0.2.1-rc.3 hardcodes Settings nav icons; third-party Settings sections fall back to a gear, so the plugin uses the supported sidebar knowledge icon as its primary entry (see FAQ).
-- No automated UI visual regression tests yet; Windows/Linux UI end-to-end verification is pending.
+- No automated UI visual regression tests yet; the v1.8.4 changes still need a real Harness GUI walkthrough.
 
 ### Development
 
@@ -554,11 +562,14 @@ dsh-knowledge-center/
 ├── lib/paths.js             # cross-platform path helpers (POSIX / win32)
 ├── lib/text.js              # distillation chunk character budget
 ├── lib/extract.js           # document text extraction (DOCX/XLSX/PPTX/PDF/HTML, …)
+├── lib/lock.js              # local cross-process file lock and cleanup
 ├── client.js                # Client half: sidebar icon + full-page panel + Settings page + Markdown renderer
 ├── cordis.patch.yml         # DSH bundle patch (inserts the Host row; Cordis is Harness's plugin framework, unrelated to Qoder)
 ├── locale/                  # plugin inventory title/description (en / zh)
-├── scripts/                # cross-platform test and syntax-check entry points
-├── docs/VERIFICATION.md    # verification methods, results and limits
+├── scripts/                 # cross-platform test and syntax-check entry points
+├── test/                    # core regression tests (development repository and CI)
+├── docs/                    # extraction guide, repair log and verification limits
+├── test.md                  # current test inventory and historical results
 ├── .github/workflows/ci.yml # three-platform CI (syntax + JSON + tests)
 ├── README.md
 └── LICENSE
@@ -566,12 +577,9 @@ dsh-knowledge-center/
 
 ```bash
 # No build step, no third-party runtime dependencies.
-node --check index.js
-node --check client.js
-node --check lib/paths.js
-node --check lib/text.js
-node --check lib/extract.js
-npm run check     # aggregated syntax checks
+npm test          # isolated core regression tests
+npm run check     # syntax, manifest, locales and path checks
+npm pack --dry-run --ignore-scripts  # release inventory
 ```
 
 Development notes:
@@ -594,8 +602,8 @@ No. Cordis (`@deepseek-ai/cordis`) is DeepSeek Harness's plugin framework; `cord
 **Q: Why is the Settings nav icon for Knowledge Center still a gear?**
 Harness 0.2.1-rc.3 hardcodes Settings nav icons by section id (`account`/`models`/`plugins`/`agent-presets`/`archived-sessions`); third-party Settings sections have no icon API and fall back to a gear. The plugin therefore places its custom knowledge icon on the officially supported **sidebar panel entry**; if a future Harness exposes a Settings section icon field, we will switch.
 
-**Q: Why are there no test files anymore?**
-The suite passed 113/113 three times in a row before v1.2.0 and was then removed as requested; `npm run check` still validates syntax, manifest and locales, and the [verification log](docs/VERIFICATION.md) keeps the evidence.
+**Q: Are test files included in the plugin package?**
+No. Core regression tests remain in the development repository for local runs and three-platform CI. The npm plugin package excludes `test/`, `scripts/` and local archives. See the [test record](test.md) for the inventory and results, and use `npm pack --dry-run --ignore-scripts` to inspect the release files.
 
 **Q: Do knowledge files contain my absolute paths?**
 No. The front matter has no absolute workspace path; `sources` are workspace-relative. Absolute paths stay in the local `index.json`.

@@ -120,7 +120,7 @@ window.__ModuleLoader__.load({
       discardChanges: '放弃修改',
       keepEditing: '继续编辑',
       scanWorkspaceChanged: '工作区或扫描结果已改变，请重新扫描后再生成。',
-      storageRecovered: '知识索引已从备份恢复，备份可能早于最近操作，知识库内容可能回退。所有工作区的模型调用授权已关闭，请到「权限与设置」重新授权。',
+      storageRecovered: '知识索引已从备份恢复，备份可能早于最近操作，知识库内容可能回退。所有工作区的模型调用授权已关闭，共享库授权也已清空，请到「权限与设置」重新授权。',
       collectionDeleted: '知识库已删除',
       permissionDeniedHint: '模型工具在未授权的工作区会被拒绝。',
     }
@@ -232,7 +232,7 @@ window.__ModuleLoader__.load({
       discardChanges: 'Discard changes',
       keepEditing: 'Keep editing',
       scanWorkspaceChanged: 'The workspace or scan has changed. Scan again before generating.',
-      storageRecovered: 'The knowledge index was restored from a backup. The backup may predate recent changes, so library contents may have reverted. Model access has been disabled for all workspaces. Re-enable the workspaces you trust in Access & Settings.',
+      storageRecovered: 'The knowledge index was restored from a backup. The backup may predate recent changes, so library contents may have reverted. Model access has been disabled for all workspaces. Shared-library grants were also cleared. Re-enable model access and library sharing in Access & Settings.',
       collectionDeleted: 'Knowledge base deleted',
       permissionDeniedHint: 'Model tools are refused in workspaces without a grant.',
     }
@@ -772,6 +772,7 @@ window.__ModuleLoader__.load({
         setErrorNotice(null)
         setPendingDelete(null)
         setPendingExit(null)
+        setMoveTarget('')
         setDraft('')
         try {
           const value = await callRpc(ctx, 'read', { id }, request.controller.signal)
@@ -796,6 +797,7 @@ window.__ModuleLoader__.load({
         setDetailError(null)
         setEditing(false)
         setDraft('')
+        setMoveTarget('')
         setPendingDelete(null)
         setPendingExit(null)
         setNotice(null)
@@ -925,22 +927,48 @@ window.__ModuleLoader__.load({
       }
 
       const moveEntryTo = async (target) => {
-        if (detail === null || target === '') return
+        if (!isCurrentDetail() || editing || target === '' || target === detail.meta.collectionId
+          || !collections.some((collection) => collection.id === target)) return
+        const request = detailRequest
+        const id = detail.meta.id
+        let committed = false
         setBusy(true)
         setNotice(null)
         setErrorNotice(null)
+        setDetailError(null)
         detailMutationRef.current = true
         try {
-          const moved = await callRpc(ctx, 'moveEntry', { id: detail.meta.id, collectionId: target })
+          const moved = await callRpc(ctx, 'moveEntry', { id, collectionId: target })
+          if (detailRequestRef.current !== request) return
+          if (moved?.id !== id) throw new Error('Moved knowledge note does not match the requested id.')
+          committed = true
+          // The Host rewrites front matter on move. Do not export or edit the
+          // previous source alongside the new library metadata.
+          setDetail(null)
+          setDraft('')
+          setDetailLoading(true)
+          const next = await callRpc(ctx, 'read', { id }, request.controller.signal)
+          if (detailRequestRef.current !== request) return
+          if (next?.meta?.id !== id) throw new Error('Knowledge note response does not match the requested id.')
+          setDetail(next)
+          setDraft(next.source)
           setMoveTarget('')
           setNotice(tr(t, 'entryMoved'))
-          setDetail((current) => (current === null ? current : { ...current, meta: moved }))
           await reload()
         } catch (failure) {
-          setErrorNotice(`${tr(t, 'errorPrefix')}${errorMessage(failure)}`)
+          if (detailRequestRef.current === request) {
+            if (committed) {
+              setDetail(null)
+              setDraft('')
+            }
+            setErrorNotice(`${tr(t, 'errorPrefix')}${errorMessage(failure)}`)
+          }
         } finally {
           detailMutationRef.current = false
-          setBusy(false)
+          if (detailRequestRef.current === request) {
+            setDetailLoading(false)
+            setBusy(false)
+          }
         }
       }
       const deleteCollection = async (id) => {
@@ -1417,34 +1445,30 @@ window.__ModuleLoader__.load({
 
     function PermissionsTab({ ctx, t, library }) {
       const { data, loading, error, reload } = library
-      const [pendingPath, setPendingPath] = useState(null)
+      const [pendingPaths, setPendingPaths] = useState([])
+      const permissionPendingRef = useRef(new Set())
       const [notice, setNotice] = useState(null)
       const [errorNotice, setErrorNotice] = useState(null)
       const [settingsNotice, setSettingsNotice] = useState(null)
-      const [shares, setShares] = useState(null)
       const [shareError, setShareError] = useState(null)
       const [shareNotice, setShareNotice] = useState(null)
       const [shareName, setShareName] = useState('')
       const [creatingShare, setCreatingShare] = useState(false)
-      const [pendingShare, setPendingShare] = useState(null)
+      const shareCreationRef = useRef(false)
+      const [pendingShares, setPendingShares] = useState([])
+      const sharePendingRef = useRef(new Set())
+      const sharedCollections = (data?.collections ?? []).filter((collection) => collection.scope === 'shared')
 
-      const loadShares = async () => {
-        try {
-          setShareError(null)
-          setShares(await callRpc(ctx, 'listShares', {}))
-        } catch (failure) {
-          setShareError(errorMessage(failure))
-        }
-      }
-      useEffect(() => { loadShares() }, [data?.totals?.collections])
-
-      const isShared = (collection, workspace) => (collection.readers ?? []).some(
-        (reader) => String(reader).toLowerCase() === String(workspace.path).toLowerCase(),
-      )
+      // The Host owns path identity rules, including Windows case folding and
+      // Linux's distinct case-sensitive workspaces.
+      const isShared = (collection, workspace) => (collection.readerWorkspaceIds ?? []).includes(String(workspace.id))
 
       const toggleShare = async (collection, workspace) => {
+        const key = `${collection.id}:${workspace.id}`
+        if (sharePendingRef.current.has(key)) return
+        sharePendingRef.current.add(key)
         const shared = isShared(collection, workspace)
-        setPendingShare(`${collection.id}:${workspace.path}`)
+        setPendingShares([...sharePendingRef.current])
         setShareNotice(null)
         setShareError(null)
         try {
@@ -1454,34 +1478,40 @@ window.__ModuleLoader__.load({
             allowed: !shared,
           })
           setShareNotice(shared ? tr(t, 'shareRevoked') : tr(t, 'shareGranted'))
-          await loadShares()
           await reload()
         } catch (failure) {
           setShareError(errorMessage(failure))
         } finally {
-          setPendingShare(null)
+          sharePendingRef.current.delete(key)
+          setPendingShares([...sharePendingRef.current])
         }
       }
 
       const createShared = async () => {
+        const name = shareName.trim()
+        if (name.length === 0 || shareCreationRef.current) return
+        shareCreationRef.current = true
         setCreatingShare(true)
         setShareNotice(null)
         setShareError(null)
         try {
-          await callRpc(ctx, 'createCollection', { name: shareName.trim(), scope: 'shared' })
+          await callRpc(ctx, 'createCollection', { name, scope: 'shared' })
           setShareName('')
           setShareNotice(tr(t, 'shareCreated'))
-          await loadShares()
           await reload()
         } catch (failure) {
           setShareError(errorMessage(failure))
         } finally {
+          shareCreationRef.current = false
           setCreatingShare(false)
         }
       }
 
       const toggle = async (workspace) => {
-        setPendingPath(workspace.path)
+        const key = String(workspace.id)
+        if (permissionPendingRef.current.has(key)) return
+        permissionPendingRef.current.add(key)
+        setPendingPaths([...permissionPendingRef.current])
         setNotice(null)
         setErrorNotice(null)
         try {
@@ -1491,7 +1521,8 @@ window.__ModuleLoader__.load({
         } catch (failure) {
           setErrorNotice(`${tr(t, 'errorPrefix')}${errorMessage(failure)}`)
         } finally {
-          setPendingPath(null)
+          permissionPendingRef.current.delete(key)
+          setPendingPaths([...permissionPendingRef.current])
         }
       }
 
@@ -1550,7 +1581,7 @@ window.__ModuleLoader__.load({
                   'aria-checked': workspace.allowed,
                   'aria-label': `${tr(t, 'accessOn')}: ${workspace.title}`,
                   'data-on': workspace.allowed,
-                  disabled: pendingPath === workspace.path,
+                  disabled: pendingPaths.includes(String(workspace.id)),
                   onClick: () => toggle(workspace),
                 }))))),
         h('div', { className: 'kc-card' },
@@ -1558,12 +1589,12 @@ window.__ModuleLoader__.load({
             h('div', null,
               h('div', { style: { fontWeight: 600, fontSize: '13px' } }, tr(t, 'shareTitle')),
               h('div', { className: 'kc-muted', style: { fontSize: '11px', lineHeight: '17px', maxWidth: '640px' } }, tr(t, 'shareHint'))),
-            h('span', { className: 'kc-badge' }, `${(shares?.collections ?? []).filter((collection) => collection.scope === 'shared').length}`)),
+            h('span', { className: 'kc-badge' }, `${sharedCollections.length}`)),
           h(Notice, { kind: 'ok', text: shareNotice }),
           h(Notice, { kind: 'error', text: shareError }),
-          (shares?.collections ?? []).filter((collection) => collection.scope === 'shared').length === 0
+          sharedCollections.length === 0
             ? h(EmptyBox, null, tr(t, 'shareEmpty'))
-            : h('div', null, (shares?.collections ?? []).filter((collection) => collection.scope === 'shared').map((collection) => h('div', { key: collection.id, style: { padding: '8px 0' } },
+            : h('div', null, sharedCollections.map((collection) => h('div', { key: collection.id, style: { padding: '8px 0' } },
                 h('div', { className: 'kc-row-between' },
                   h('div', { style: { fontWeight: 600 } }, collection.name),
                   h('span', { className: 'kc-muted', style: { fontSize: '11px' } }, `${(collection.readers ?? []).length} / ${workspaces.length}`)),
@@ -1574,12 +1605,13 @@ window.__ModuleLoader__.load({
                     type: 'button',
                     className: 'kc-btn kc-btn-small',
                     'data-on': shared,
-                    disabled: pendingShare === `${collection.id}:${workspace.path}`,
+                    'aria-pressed': shared,
+                    disabled: pendingShares.includes(`${collection.id}:${workspace.id}`),
                     onClick: () => toggleShare(collection, workspace),
                   }, `${workspace.title}${shared ? ' ✓' : ''}`)
                 }))))),
           h('div', { className: 'kc-row', style: { marginTop: '10px' } },
-            h('input', { className: 'kc-input', placeholder: tr(t, 'shareCreatePlaceholder'), value: shareName, maxLength: 80, onChange: (event) => setShareName(event.target.value) }),
+            h('input', { className: 'kc-input', placeholder: tr(t, 'shareCreatePlaceholder'), 'aria-label': tr(t, 'shareCreatePlaceholder'), value: shareName, maxLength: 80, disabled: creatingShare, onChange: (event) => setShareName(event.target.value) }),
             h('button', { type: 'button', className: 'kc-btn kc-btn-small', disabled: shareName.trim().length === 0 || creatingShare, onClick: createShared }, tr(t, 'shareCreate')))),        h('div', { className: 'kc-card' },
           h('div', { style: { fontWeight: 600, fontSize: '13px' } }, tr(t, 'stats')),
           h('dl', { className: 'kc-kv' },

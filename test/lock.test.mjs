@@ -198,6 +198,40 @@ function accessError(code, operation) {
   return error
 }
 
+test('a successful rename after the acquisition deadline never enters the operation', async (t) => temporary(async (root) => {
+  const path = join(root, 'index.lock')
+  const rename = fs.rename.bind(fs)
+  t.mock.method(fs, 'rename', async (source, target) => {
+    if (target === path) await new Promise((resolve) => setTimeout(resolve, 60))
+    return rename(source, target)
+  })
+  let entered = false
+  await assert.rejects(withFileLock(path, () => { entered = true }, { timeoutMs: 20 }), { code: 'LOCK_TIMEOUT' })
+  assert.equal(entered, false)
+  assert.deepEqual(await readdir(root), [])
+}))
+
+test('zero acquisition timeout permits one uncontended attempt', async () => temporary(async (root) => {
+  assert.equal(await withFileLock(join(root, 'index.lock'), () => 42, { timeoutMs: 0 }), 42)
+  assert.deepEqual(await readdir(root), [])
+}))
+
+test('temporary denial while unlinking the unique owner is retried safely', async (t) => temporary(async (root) => {
+  const path = join(root, 'index.lock')
+  const unlinkOwner = fs.unlink.bind(fs)
+  let denied = false
+  t.mock.method(fs, 'unlink', async (target) => {
+    if (!denied && String(target).startsWith(`${path}/owner-`)) {
+      denied = true
+      throw accessError('EPERM', 'unlink')
+    }
+    return unlinkOwner(target)
+  })
+  assert.equal(await withFileLock(path, () => 'saved'), 'saved')
+  assert.equal(denied, true)
+  assert.deepEqual(await readdir(root), [])
+}))
+
 test('keeps competing when a rename is denied as the active owner releases', async (t) => temporary(async (root) => {
   const path = join(root, 'index.lock')
   let releaseOld

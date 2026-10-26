@@ -1,37 +1,41 @@
-# 测试记录（本地资产）
+# 测试记录（开发仓库与 CI）
 
-本文件记录 dsh-knowledge-center 的测试策略、用例清单与最近结果。测试代码是**本地资产**：`test/` 已在 `.gitignore` 中忽略，不随仓库或 npm 包发布；结果统一写在这里。
+本文件记录 dsh-knowledge-center 的测试策略、当前用例清单与历史结果。`test/` 保留在开发仓库并由 CI 执行，不进入 npm 插件发布包；验证范围统一见 [验证记录](docs/VERIFICATION.md)。历史各版本的本地测试口径以对应日期为准。
 
 ## 策略
 
-- 行为测试只在开发机本地运行，避免把本机绝对路径、临时数据和调试细节带进发布物。
-- 发布门槛：`npm run check`（语法 + 包清单/本地化校验）由 CI 在 macOS / Ubuntu / Windows 三平台执行；行为测试在本地执行并在本文件留档。
+- 行为测试在开发机与 CI 使用隔离的临时目录运行，不把真实知识库、测试输出或本地归档带进发布物。
+- 发布门槛：`npm run check`（语法、包清单、文档路径）与 `npm test` 均在 macOS / Ubuntu / Windows 三平台 CI 执行；发布前另检查 `npm pack --dry-run`。
 - 测试使用真实临时目录、真实子进程与真实临时知识库，不读取也不写入真实知识库。
 
 ## 怎么跑
 
-```powershell
-$files = Get-ChildItem test -Filter '*.test.mjs' | ForEach-Object { $_.FullName }
-node --test $files
+```bash
+npm test
+npm run check
 ```
 
-## 当前用例（123 项）
+## 当前用例（152 项，v1.8.4）
 
 | 文件 | 覆盖 | 用例数 |
 | --- | --- | --- |
-| `test/client-behavior.test.mjs` | 详情串页误删、旧响应与错误、编辑草稿、扫描与搜索竞态、共享刷新、恢复提示、键盘操作 | 21 |
+| `test/client-behavior.test.mjs` | 详情串页、草稿、扫描/搜索、分享并发、移动回读与失败保护、恢复提示、键盘操作 | 29 |
 | `test/extract.test.mjs` | DOCX/XLSX/PPTX/HTML/PDF 提取、解压预算、取消传播 | 27 |
 | `test/host.test.mjs` | RPC、授权、生成、检索、预算阶梯与 max 兜底、截断回执、版本门/迁移、S1 收口、会话附件提炼、库级共享与撤销、共享库写入与移动、嵌套不继承/移动查重、**v1.8.1 搜索不泄露来源路径** | 26 |
-| `test/lock.test.mjs` | 同进程与真实子进程互斥、锁释放、崩溃回收、Windows 注入回归 | 15 |
+| `test/lock.test.mjs` | 同进程与子进程互斥、Windows 访问错误、崩溃回收、获取期限与 owner unlink 重试 | 18 |
 | `test/manifest.test.mjs` | 包入口、发布文件、bundle、locale、许可证一致性 | 6 |
 | `test/paths.test.mjs` | win32/darwin/POSIX 路径规则、工作区边界、来源身份 | 11 |
 | `test/store-recovery.test.mjs` | 备份、损坏/缺失索引恢复、重新授权、I/O 失败、防止静默清空、**v1.8 恢复时清空共享授权** | 11 |
 | `test/text.test.mjs` | 分片覆盖、字符预算、边界输入 | 6 |
+| `test/attachment.test.mjs` | 旧版 Office 附件转换、服务缺失与存储边界 | 3 |
+| `test/sharing.test.mjs` | 移动元数据、并发、异常回滚、共享人数与平台成员匹配 | 11 |
+| `test/check.test.mjs` | Windows/macOS/Linux 文档路径检测与可移植示例放行 | 4 |
 
 ## 最近结果
 
 | 日期 | 环境 | 轮次 | 结果 |
 | --- | --- | --- | --- |
+| 2026-10-26 | macOS，Node.js 24.16.0，v1.8.4 | 发布前验证 | 152/152 通过，0 失败/跳过/取消；新提交 CI 尚未执行 |
 | 2026-10-25 | Windows 11，Node.js 24.16.0 | 1 | 123/123 通过，0 失败/跳过/取消 |
 
 v1.2.0 发布前同一套件在 Windows（Node.js 22.23.4 与 24.16.0）下连续 3 轮 113/113；v1.3.0 新增 3 项版本门与 S1 用例后为 116 项。
@@ -48,9 +52,10 @@ v1.2.0 发布前同一套件在 Windows（Node.js 22.23.4 与 24.16.0）下连�
 
 ## 尚未覆盖
 
-- 10MB 级 PDF/Office/文本的端到端提炼（工具路径受 600s 时长约束，建议走 UI 路径）。
-- 对话附件提炼（B 阶段）与跨工作区共享（C 阶段）。
-- 三平台 CI 的新提交结果（推送后确认）。
+- v1.8.4 本地修复后的真实宿主 GUI 与旧版 Office 附件全流程。
+- 大文件长任务的持续恢复，以及正文与索引的断电恢复事务。
+- v1.8.3 基线三平台 CI 已通过；v1.8.4 新提交的三平台 CI 仍需推送后确认。
+- B/C 阶段已有的历史实机证据见下文，不代替新修改的验收。
 
 ## v1.4.0（B 阶段：会话附件）
 
@@ -125,7 +130,7 @@ v1.2.0 发布前同一套件在 Windows（Node.js 22.23.4 与 24.16.0）下连�
 
 ## v1.8.3（共享删除警告 + 大附件实机）
 
-- 共享库删除确认新增警告：显示“删除共享库？N 个工作区将立即失去访问”；`state().collections` 暴露 readers 供计数。
+- 共享库删除确认新增警告：“删除共享库？N 个工作区将立即失去访问”。当时 owner state 遗漏 readers，人数可能误报为 0；v1.8.4 补齐 `state().collections` 的 readers 与工作区 ID。
 - 9 MB docx 实机（大媒体 + 75 字符正文）：入库成功，2252 字节笔记，`distillEffort=max`，`truncated=false`。
 - 26 MiB PDF 实机：拒绝，错误 `Attachment is larger than 25 MiB`。
 - 说明：当时宿主仍加载 v1.8.0 之前的代码，来源写作 `附件/big-9mb.docx`；重启后新附件使用 `附件/<sha12>-<name>`。
